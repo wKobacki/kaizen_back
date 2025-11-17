@@ -4,7 +4,7 @@ const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 const nodemailer = require('nodemailer');
-const mysql = require('mysql2');
+const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
 const { body, validationResult } = require('express-validator');
 const fs = require('fs');
@@ -13,20 +13,17 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT;
 
-const db = mysql.createConnection({
+const db = new Pool({
     host: process.env.DB_HOST,
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
+    port: process.env.DB_PORT || 5432,
 });
 
-db.connect((err) => {
-    if (err) {
-        console.error('Błąd połączenia z bazą danych:', err);
-        return;
-    }
-    console.log('Połączono z bazą danych MySQL');
-});
+db.connect()
+    .then(() => console.log('✅ Połączono z bazą danych PostgreSQL'))
+    .catch((err) => console.error('❌ Błąd połączenia z bazą danych:', err));
 
 app.use(cors({
     origin: ['http://localhost', 'http://localhost:3000'],
@@ -100,35 +97,40 @@ function authenticateUser(req, res, next) {
         return res.status(401).json({ message: 'Brak uwierzytelnienia' });
     }
 
-    db.query('SELECT * FROM users WHERE email = ?', [userEmail], (err, results) => {
+    db.query('SELECT * FROM "Users" WHERE email = $1', [userEmail], (err, result) => {
         if (err) {
             console.error('Błąd podczas sprawdzania użytkownika:', err);
             return res.status(500).json({ message: 'Błąd serwera przy uwierzytelnieniu' });
         }
 
-        if (results.length === 0) {
+        if (result.rows.length === 0) {
             console.warn('Nie znaleziono użytkownika:', userEmail);
             return res.status(403).json({ message: 'Brak dostępu' });
         }
 
-        req.user = { email: results[0].email }; 
+        req.user = result.rows[0]; 
         next();
     });
 }
 
 function authenticateAdmin(req, res, next) {
     const userEmail = req.headers['x-user-email'];
+
     if (!userEmail) {
         return res.status(401).json({ message: 'Brak uwierzytelnienia' });
     }
-    db.query('SELECT * FROM users WHERE email = ?', [userEmail], (err, results) => {
-        if (err || results.length === 0) {
+
+    db.query('SELECT * FROM "Users" WHERE email = $1', [userEmail], (err, result) => {
+        if (err || result.rows.length === 0) {
             return res.status(403).json({ message: 'Brak dostępu' });
         }
-        const user = results[0];
+
+        const user = result.rows[0];
+
         if (user.role !== 'admin' && user.role !== 'manager') {
             return res.status(403).json({ message: 'Brak uprawnień' });
         }
+
         req.user = user;
         next();
     });
@@ -308,32 +310,50 @@ app.post('/resend-verification-code',
     });
 
 app.post('/login',
-    [
-        body('email').isEmail().withMessage('Nieprawidłowy adres e-mail'),
-        body('password').notEmpty().withMessage('Hasło jest wymagane'),
-    ],
-    (req, res) => {
-        const errors = validationResult(req);
-        if (!errors.isEmpty()) {
-            return res.status(400).json({ message: 'Błędne dane wejściowe', errors: errors.array() });
-        }
+  [
+    body('email').isEmail().withMessage('Nieprawidłowy adres e-mail'),
+    body('password').notEmpty().withMessage('Hasło jest wymagane'),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: 'Błędne dane wejściowe', errors: errors.array() });
+    }
 
-        const { email, password } = req.body;
+    const { email, password } = req.body;
 
-        db.query('SELECT * FROM users WHERE email = ?', [email], async (err, results) => {
-            if (err) return res.status(500).json({ message: 'Błąd bazy danych' });
-            if (results.length === 0) return res.status(401).json({ message: 'Nieprawidłowy e-mail lub hasło' });
+    try {
+      const result = await db.query('SELECT * FROM "Users" WHERE email = $1', [email]);
 
-            const user = results[0];
+      if (result.rows.length === 0) {
+        return res.status(401).json({ message: 'Nieprawidłowy e-mail lub hasło' });
+      }
 
-            const passwordMatch = await bcrypt.compare(password, user.password);
-            if (!passwordMatch) return res.status(401).json({ message: 'Nieprawidłowy e-mail lub hasło' });
+      const user = result.rows[0];
+      const passwordMatch = await bcrypt.compare(password, user.password);
 
-            if (!user.isVerified) return res.status(403).json({ message: 'Proszę zweryfikować adres e-mail, aby aktywować konto.' });
+      if (!passwordMatch) {
+        return res.status(401).json({ message: 'Nieprawidłowy e-mail lub hasło' });
+      }
 
-            res.status(200).json({ message: 'Logowanie zakończone sukcesem', user: { email: user.email, role: user.role, branch: user.branch } });
-        });
-    });
+      if (!user.isVerified) {
+        return res.status(403).json({ message: 'Proszę zweryfikować adres e-mail, aby aktywować konto.' });
+      }
+
+      res.status(200).json({
+        message: 'Logowanie zakończone sukcesem',
+        user: {
+          email: user.email,
+          role: user.role,
+          branch: user.branch,
+        },
+      });
+    } catch (err) {
+      console.error('Błąd podczas logowania:', err);
+      res.status(500).json({ message: 'Błąd serwera' });
+    }
+  }
+);
 
 app.post('/forgot-password',
     [
@@ -424,7 +444,7 @@ app.post('/submitIdea', upload.array('images', 3), authenticateUser,
             return res.status(400).json({ message: 'Błędne dane wejściowe', errors: errors.array() });
         }
 
-        const { title, department, description, solution, branch } = req.body;
+        const { title, department, description, solution } = req.body;
         const images = req.files ? req.files.map(file => `/uploads/${file.filename}`) : [];
         const userEmail = req.user.email;
 
@@ -433,17 +453,31 @@ app.post('/submitIdea', upload.array('images', 3), authenticateUser,
             return res.status(403).json({ message: 'Nie masz uprawnień do dodawania pomysłów.' });
         }
 
-        const sqlQuery = 'INSERT INTO ideas (title, department, description, solution, images, branch, status, votes, createdAt, author_email, isPublished, archived) VALUES (?, ?, ?, ?, ?, ?, "pending", 0, NOW(), ?, false, false)';
-        const values = [title, department, description, solution, JSON.stringify(images), branch || user.branch, userEmail];
+        const sqlQuery = `
+            INSERT INTO "General_ideas"
+            (title, department, description, solution, images, status, votes, "createdAt", author_email, "isPublished", archived)
+            VALUES ($1, $2, $3, $4, $5, 'pending', 0, NOW(), $6, FALSE, FALSE)
+        `;
 
-        db.query(sqlQuery, values, (err) => {
-            if (err) {
+        const values = [
+            title,
+            department,
+            description,
+            solution,
+            JSON.stringify(images),
+            userEmail
+        ];
+
+        db.query(sqlQuery, values)
+            .then(() => {
+                res.status(201).json({ message: 'Pomysł dodany pomyślnie, oczekuje na akceptację.' });
+            })
+            .catch(err => {
                 console.error('Błąd bazy danych podczas wstawiania pomysłu:', err);
-                return res.status(500).json({ message: 'Błąd bazy danych podczas wstawiania pomysłu' });
-            }
-            res.status(201).json({ message: 'Pomysł dodany pomyślnie, oczekuje na akceptację przez admina.' });
-        });
-    });
+                res.status(500).json({ message: 'Błąd bazy danych podczas wstawiania pomysłu' });
+            });
+    }
+);
 
 app.post('/submitProblem', upload.array('images', 3), authenticateUser,
     [
@@ -471,164 +505,183 @@ app.post('/submitProblem', upload.array('images', 3), authenticateUser,
             return res.status(403).json({ message: 'Nie masz uprawnień do dodawania problemów.' });
         }
 
-        const sqlQuery = 'INSERT INTO problems (title, department, description, solution, images, branch, status, votes, createdAt, author_email, isPublished, archived) VALUES (?, ?, ?, ?, ?, ?, "pending", 0, NOW(), ?, false, false)';
-        const values = [title, department, description, solution, JSON.stringify(images), branch || user.branch, userEmail];
+        const sqlQuery = `
+            INSERT INTO "Local_ideas"
+            (title, department, description, solution, images, branch, status, votes, crated_at, author_email, is_published, archived)
+            VALUES ($1, $2, $3, $4, $5, $6, 'pending', 0, NOW(), $7, FALSE, FALSE)
+        `;
 
-        db.query(sqlQuery, values, (err) => {
-            if (err) {
+        const values = [
+            title,
+            department,
+            description,
+            solution,
+            JSON.stringify(images),
+            branch || user.branch,
+            userEmail
+        ];
+
+        db.query(sqlQuery, values)
+            .then(() => {
+                res.status(201).json({ message: 'Problem dodany pomyślnie, oczekuje na akceptację.' });
+            })
+            .catch(err => {
                 console.error('Błąd bazy danych podczas wstawiania problemu:', err);
-                return res.status(500).json({ message: 'Błąd bazy danych podczas wstawiania problemu' });
-            }
-            res.status(201).json({ message: 'Problem zgłoszony pomyślnie, oczekuje na akceptację przez admina.' });
-        });
-    });
+                res.status(500).json({ message: 'Błąd bazy danych podczas wstawiania problemu' });
+            });
+    }
+);
 
-app.get('/problems', (req, res) => {
+app.get('/problems', async (req, res) => {
     const userEmail = req.headers['x-user-email'];
     const { status, archived, branch } = req.query;
 
-    let sqlQuery = 'SELECT * FROM problems WHERE (isPublished = true OR status = "completed")';
-    const queryParams = [];
+    try {
+        let sqlQuery = `
+            SELECT * FROM "Local_ideas"
+            WHERE (is_published = TRUE OR status = 'completed')
+        `;
+        const queryParams = [];
+        let paramIndex = 1;
 
-    if (status) {
-        const statuses = status.split(',');
-        sqlQuery += ` AND status IN (${statuses.map(() => '?').join(',')})`;
-        queryParams.push(...statuses);
-    }
-
-    if (archived) {
-        sqlQuery += ' AND archived = ?';
-        queryParams.push(archived === 'true');
-    }
-
-    if (branch) {
-        sqlQuery += ' AND branch = ?';
-        queryParams.push(branch);
-    }
-
-    db.query(sqlQuery, queryParams, (err, results) => {
-        if (err) {
-            console.error('Błąd bazy danych:', err);
-            return res.status(500).json({ message: 'Błąd bazy danych' });
+        // status=waiting,in_voting,completed
+        if (status) {
+            const statuses = status.split(',');
+            sqlQuery += ` AND status = ANY($${paramIndex++})`;
+            queryParams.push(statuses);
         }
 
-        const problemIds = results.map(p => p.id);
+        if (archived) {
+            sqlQuery += ` AND archived = $${paramIndex++}`;
+            queryParams.push(archived === 'true');
+        }
 
-        if (problemIds.length === 0) {
+        if (branch) {
+            sqlQuery += ` AND branch = $${paramIndex++}`;
+            queryParams.push(branch);
+        }
+
+        const problemsResult = await db.query(sqlQuery, queryParams);
+        const problems = problemsResult.rows;
+
+        if (problems.length === 0) {
             return res.json({ problems: [], userVoteCount: 0 });
         }
 
-        db.query(
-            'SELECT item_id FROM user_votes WHERE user_email = ? AND item_type = "problem" AND item_id IN (?)',
-            [userEmail, problemIds],
-            (err2, voteResults) => {
-                if (err2) {
-                    console.error('Błąd pobierania głosów użytkownika:', err2);
-                    return res.status(500).json({ message: 'Błąd bazy danych' });
-                }
+        const problemIds = problems.map(p => p.id);
 
-                const votedIds = voteResults.map(v => v.item_id);
-                const problems = results.map(p => ({
-                    ...p,
-                    images: parseImagesField(p.images),
-                    hasVoted: votedIds.includes(p.id)
-                }));
+        // pobieramy głosy użytkownika
+        const voteQuery = `
+            SELECT item_id 
+            FROM user_votes 
+            WHERE user_email = $1 AND item_type = 'problem' AND item_id = ANY($2)
+        `;
+        const voteResult = await db.query(voteQuery, [userEmail, problemIds]);
 
-                db.query(
-                    `SELECT COUNT(*) AS voteCount 
-                     FROM user_votes 
-                     JOIN problems ON user_votes.item_id = problems.id 
-                     WHERE user_votes.user_email = ? AND user_votes.item_type = 'problem' AND problems.status = 'in_voting'`,
-                    [userEmail],
-                    (err3, voteCountResult) => {
-                        if (err3) {
-                            console.error('Błąd pobierania liczby głosów:', err3);
-                            return res.status(500).json({ message: 'Błąd bazy danych' });
-                        }
+        const votedIds = voteResult.rows.map(v => v.item_id);
 
-                        res.json({
-                            problems,
-                            userVoteCount: voteCountResult[0].voteCount
-                        });
-                    }
-                );
-            }
-        );
-    });
+        const enriched = problems.map(p => ({
+            ...p,
+            images: parseImagesField(p.images),
+            hasVoted: votedIds.includes(p.id)
+        }));
+
+        // Licznik głosów użytkownika
+        const countQuery = `
+            SELECT COUNT(*) AS voteCount
+            FROM user_votes
+            JOIN "Local_ideas" ON user_votes.item_id = "Local_ideas".id
+            WHERE user_votes.user_email = $1 
+            AND user_votes.item_type = 'problem'
+            AND "Local_ideas".status = 'in_voting'
+        `;
+        const countResult = await db.query(countQuery, [userEmail]);
+
+        res.json({
+            problems: enriched,
+            userVoteCount: Number(countResult.rows[0].votecount)
+        });
+
+    } catch (err) {
+        console.error('Błąd serwera /problems:', err);
+        res.status(500).json({ message: 'Błąd bazy danych' });
+    }
 });
 
-app.get('/ideas', (req, res) => {
+app.get('/ideas', async (req, res) => {
     const userEmail = req.headers['x-user-email'];
-    const { status, archived, branch } = req.query;
+    const { status, archived } = req.query;
 
-    let sqlQuery = 'SELECT * FROM ideas WHERE (isPublished = true OR status = "completed")';
-    const queryParams = [];
+    try {
+        let sqlQuery = `SELECT * FROM "General_ideas" WHERE "isPublished" = true`;
+        const queryParams = [];
+        let paramIndex = 1;
 
-    if (status) {
-        const statuses = status.split(',');
-        sqlQuery += ` AND status IN (${statuses.map(() => '?').join(',')})`;
-        queryParams.push(...statuses);
-    }
+        // ---- STATUS ----
+        if (status !== undefined && status !== '') {
+            const statuses = status
+                .split(',')
+                .map(s => s.trim()); // na wszelki wypadek obcinamy spacje
 
-    if (archived) {
-        sqlQuery += ' AND archived = ?';
-        queryParams.push(archived === 'true');
-    }
-
-    if (branch) {
-        sqlQuery += ' AND branch = ?';
-        queryParams.push(branch);
-    }
-
-    db.query(sqlQuery, queryParams, (err, results) => {
-        if (err) {
-            console.error('Błąd bazy danych:', err);
-            return res.status(500).json({ message: 'Błąd bazy danych' });
+            // KLUCZOWA ZMIANA: rzutowanie placeholdera na text[]
+            sqlQuery += ` AND status = ANY($${paramIndex}::text[])`;
+            queryParams.push(statuses);
+            paramIndex++;
         }
 
-        const ideaIds = results.map(i => i.id);
+        // ---- ARCHIVED ----
+        if (archived !== undefined) {
+            sqlQuery += ` AND archived = $${paramIndex}::boolean`;
+            queryParams.push(archived === 'true');
+            paramIndex++;
+        }
 
-        if (ideaIds.length === 0) {
+        // DODAJEMY LOGI, ŻEBY WIDZIEĆ, CO FAKTYCZNIE LECI DO BAZY
+        console.log('[GET /ideas] SQL:', sqlQuery);
+        console.log('[GET /ideas] params:', queryParams);
+
+        const ideasResult = await db.query(sqlQuery, queryParams);
+        const ideas = ideasResult.rows;
+
+        if (ideas.length === 0) {
             return res.json({ ideas: [], userVoteCount: 0 });
         }
 
-        db.query(
-            'SELECT item_id FROM user_votes WHERE user_email = ? AND item_type = "idea" AND item_id IN (?)',
-            [userEmail, ideaIds],
-            (err2, voteResults) => {
-                if (err2) {
-                    console.error('Błąd bazy danych (głosy):', err2);
-                    return res.status(500).json({ message: 'Błąd bazy danych' });
-                }
+        const ideaIds = ideas.map(i => i.id);
 
-                const votedIds = voteResults.map(v => v.item_id);
-                const ideas = results.map(i => ({
-                    ...i,
-                    images: parseImagesField(i.images),
-                    hasVoted: votedIds.includes(i.id)
-                }));
+        const voteQuery = `
+            SELECT item_id 
+            FROM user_votes 
+            WHERE user_email = $1 AND item_type = 'idea' AND item_id = ANY($2)
+        `;
+        const voteResult = await db.query(voteQuery, [userEmail, ideaIds]);
+        const votedIds = voteResult.rows.map(v => v.item_id);
 
-                db.query(
-                    `SELECT COUNT(*) AS voteCount 
-                     FROM user_votes 
-                     JOIN ideas ON user_votes.item_id = ideas.id 
-                     WHERE user_votes.user_email = ? AND user_votes.item_type = 'idea' AND ideas.status = 'in_voting'`,
-                    [userEmail],
-                    (err3, voteCountResult) => {
-                        if (err3) {
-                            console.error('Błąd bazy danych (licznik głosów):', err3);
-                            return res.status(500).json({ message: 'Błąd bazy danych' });
-                        }
+        const enriched = ideas.map(i => ({
+            ...i,
+            images: parseImagesField(i.images),
+            hasVoted: votedIds.includes(i.id)
+        }));
 
-                        res.json({
-                            ideas,
-                            userVoteCount: voteCountResult[0].voteCount
-                        });
-                    }
-                );
-            }
-        );
-    });
+        const countQuery = `
+            SELECT COUNT(*) AS voteCount
+            FROM user_votes
+            JOIN "General_ideas" ON user_votes.item_id = "General_ideas".id
+            WHERE user_votes.user_email = $1 
+              AND user_votes.item_type = 'idea'
+              AND "General_ideas".status = 'in_voting'
+        `;
+        const countResult = await db.query(countQuery, [userEmail]);
+
+        res.json({
+            ideas: enriched,
+            userVoteCount: Number(countResult.rows[0].votecount)
+        });
+
+    } catch (err) {
+        console.error('Błąd serwera /ideas:', err);
+        res.status(500).json({ message: 'Błąd bazy danych' });
+    }
 });
 
 app.post('/ideas/:id/vote', authenticateUser, (req, res) => {
@@ -753,68 +806,45 @@ app.post('/problems/:id/vote', authenticateUser, (req, res) => {
     });
 });
 
-app.get('/admin/ideas', (req, res) => {
+app.get('/admin/ideas', async (req, res) => {
     const { archived } = req.query;
 
+    const archivedValue = archived === 'true';
 
-    let sqlQueryIdeas = 'SELECT * FROM ideas';
-    let sqlQueryProblems = 'SELECT * FROM problems';
+    try {
+        // GENERAL IDEAS
+        const sqlGeneral = `
+            SELECT *, 'idea' AS type 
+            FROM "General_ideas"
+            WHERE archived = $1
+        `;
+        const generalResult = await db.query(sqlGeneral, [archivedValue]);
+        const generalIdeas = generalResult.rows.map(idea => ({
+            ...idea,
+            images: parseImagesField(idea.images)
+        }));
 
-    const ideaConditions = [];
-    const problemConditions = [];
-    const ideaQueryParams = [];
-    const problemQueryParams = [];
+        // LOCAL IDEAS (problems)
+        const sqlLocal = `
+            SELECT *, 'problem' AS type 
+            FROM "Local_ideas"
+            WHERE archived = $1
+        `;
+        const localResult = await db.query(sqlLocal, [archivedValue]);
+        const problems = localResult.rows.map(problem => ({
+            ...problem,
+            images: parseImagesField(problem.images)
+        }));
 
-    if (archived) {
-        ideaConditions.push('archived = ?');
-        problemConditions.push('archived = ?');
-        const archivedValue = archived === 'true';
-        ideaQueryParams.push(archivedValue);
-        problemQueryParams.push(archivedValue);
-    } else {
-        ideaConditions.push('archived = ?');
-        problemConditions.push('archived = ?');
-        ideaQueryParams.push(false);
-        problemQueryParams.push(false);
+        res.json([...generalIdeas, ...problems]);
+
+    } catch (err) {
+        console.error("Database error:", err);
+        res.status(500).json({ message: "Database error" });
     }
-
-    if (ideaConditions.length > 0) {
-        sqlQueryIdeas += ' WHERE ' + ideaConditions.join(' AND ');
-    }
-
-    if (problemConditions.length > 0) {
-        sqlQueryProblems += ' WHERE ' + problemConditions.join(' AND ');
-    }
-
-    db.query(sqlQueryIdeas, ideaQueryParams, (err, ideas) => {
-        if (err) {
-            console.error('Database error while fetching ideas:', err);
-            return res.status(500).json({ message: 'Database error' });
-        }
-
-        const parsedIdeas = ideas.map(idea => {
-            const images = parseImagesField(idea.images);
-            return { ...idea, images, type: 'idea' };
-        });
-
-        db.query(sqlQueryProblems, problemQueryParams, (err, problems) => {
-            if (err) {
-                console.error('Database error while fetching problems:', err);
-                return res.status(500).json({ message: 'Database error' });
-            }
-
-            const parsedProblems = problems.map(problem => {
-                const images = parseImagesField(problem.images);
-                return { ...problem, images, type: 'problem' };
-            });
-
-            const combinedData = [...parsedIdeas, ...parsedProblems];
-            res.json(combinedData);
-        });
-    });
 });
 
-app.put('/admin/:type/:id/status', authenticateAdmin, (req, res) => {
+app.put('/admin/:type/:id/status', authenticateAdmin, async (req, res) => {
     const itemId = parseInt(req.params.id);
     const { status } = req.body;
     const type = req.params.type;
@@ -830,69 +860,89 @@ app.put('/admin/:type/:id/status', authenticateAdmin, (req, res) => {
         return res.status(400).json({ message: 'Nieprawidłowy status elementu' });
     }
 
-    const table = type === 'ideas' ? 'ideas' : 'problems';
+    const table =
+        type === 'ideas'
+            ? `"General_ideas"`
+            : `"Local_ideas"`;
 
-    const isPublished = (status === 'in_voting' || status === 'in_progress') ? true : false;
+    const publishColumn =
+        type === 'ideas'
+            ? `"isPublished"`
+            : `is_published`;
 
-    db.query(
-        `UPDATE ${table} SET status = ?, isPublished = ? WHERE id = ?`,
-        [status, isPublished, itemId],
-        (err) => {
-            if (err) {
-                console.error('Błąd bazy danych przy aktualizacji statusu:', err);
-                return res.status(500).json({ message: 'Błąd bazy danych' });
-            }
-            res.status(200).json({ message: 'Status elementu zaktualizowany' });
+    const isPublished = ['in_voting', 'in_progress'].includes(status);
+
+    try {
+        const updateQuery = `
+            UPDATE ${table}
+            SET status = $1, ${publishColumn} = $2
+            WHERE id = $3
+        `;
+        const result = await db.query(updateQuery, [status, isPublished, itemId]);
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ message: "Element nie istnieje" });
         }
-    );
+
+        res.status(200).json({ message: 'Status elementu zaktualizowany' });
+    } catch (err) {
+        console.error("DB error:", err);
+        res.status(500).json({ message: "Błąd bazy danych" });
+    }
 });
 
-app.delete('/admin/problems/:id', authenticateAdmin, (req, res) => {
+app.delete('/admin/problems/:id', authenticateAdmin, async (req, res) => {
     const problemId = parseInt(req.params.id, 10);
+
     if (isNaN(problemId) || problemId <= 0) {
         return res.status(400).json({ message: 'Invalid ID format' });
     }
 
-    db.query('DELETE FROM problems WHERE id = ?', [problemId], (err, result) => {
-        if (err) {
-            console.error('Database error:', err);
-            return res.status(500).json({ message: 'Database error' });
-        }
+    try {
+        const result = await db.query(
+            'DELETE FROM "Local_ideas" WHERE id = $1',
+            [problemId]
+        );
 
-        if (result.affectedRows === 0) {
+        if (result.rowCount === 0) {
             return res.status(404).json({ message: 'Problem not found' });
         }
 
         res.status(200).json({ message: 'Problem deleted successfully' });
-    });
+    } catch (err) {
+        console.error("Database error:", err);
+        res.status(500).json({ message: 'Database error' });
+    }
 });
 
-app.delete('/admin/ideas/:id', (req, res) => {
+app.delete('/admin/ideas/:id', authenticateAdmin, async (req, res) => {
     const ideaId = parseInt(req.params.id, 10);
-    console.log(`Received request to delete idea with ID: ${ideaId}`);
 
     if (isNaN(ideaId) || ideaId <= 0) {
         console.error(`Invalid ID format: ${req.params.id}`);
         return res.status(400).json({ message: 'Invalid ID format' });
     }
 
-    db.query('DELETE FROM ideas WHERE id = ?', [ideaId], (err, result) => {
-        if (err) {
-            console.error('Database error:', err);
-            return res.status(500).json({ message: 'Database error' });
-        }
+    try {
+        const result = await db.query(
+            'DELETE FROM "General_ideas" WHERE id = $1',
+            [ideaId]
+        );
 
-        if (result.affectedRows === 0) {
-            console.warn(`No idea found with ID: ${ideaId}`);
+        if (result.rowCount === 0) {
             return res.status(404).json({ message: 'Idea not found' });
         }
 
         console.log(`Idea with ID: ${ideaId} deleted successfully.`);
-        return res.status(200).json({ message: 'Idea deleted successfully' });
-    });
+        res.status(200).json({ message: 'Idea deleted successfully' });
+
+    } catch (err) {
+        console.error("Database error:", err);
+        res.status(500).json({ message: 'Database error' });
+    }
 });
 
-app.put('/admin/:type/:id/archive', authenticateAdmin, (req, res) => {
+app.put('/admin/:type/:id/archive', authenticateAdmin, async (req, res) => {
     const itemId = parseInt(req.params.id);
     const { archived } = req.body;
     const type = req.params.type;
@@ -901,115 +951,204 @@ app.put('/admin/:type/:id/archive', authenticateAdmin, (req, res) => {
         return res.status(400).json({ message: 'Nieprawidłowy typ elementu' });
     }
 
-    const table = type === 'ideas' ? 'ideas' : 'problems';
-    db.query(`UPDATE ${table} SET archived = ? WHERE id = ?`, [archived, itemId], (err) => {
-        if (err) return res.status(500).json({ message: 'Błąd bazy danych' });
-        res.json({ message: 'Archiwizacja elementu zakończona pomyślnie' });
-    });
-});
+    const table =
+        type === 'ideas'
+            ? `"General_ideas"`
+            : `"Local_ideas"`;
 
-app.put('/admin/users/:id/role', authenticateUser, (req, res) => {
-    const { role } = req.body;
-    const id = parseInt(req.params.id, 10); 
-    if (!role) return res.status(400).json({ message: 'Brak nowej roli.' });
+    try {
+        const result = await db.query(
+            `UPDATE ${table} SET archived = $1 WHERE id = $2`,
+            [archived === true, itemId]
+        );
 
-    const sql = 'UPDATE users SET role = ? WHERE id = ?';
-    db.query(sql, [role, id], (err, result) => {
-        if (err) {
-            console.error('Błąd bazy danych przy zmianie roli:', err);
-            return res.status(500).json({ message: 'Błąd bazy danych.' });
+        if (result.rowCount === 0) {
+            return res.status(404).json({ message: 'Element nie istnieje' });
         }
-        res.status(200).json({ message: 'Rola zmieniona.' });
-    });
+
+        res.json({ message: 'Archiwizacja elementu zakończona pomyślnie' });
+
+    } catch (err) {
+        console.error("Database error:", err);
+        res.status(500).json({ message: 'Błąd bazy danych' });
+    }
 });
 
-app.put('/admin/users/:id/branch', authenticateAdmin, (req, res) => {
+app.put('/admin/users/:id/role', authenticateAdmin, async (req, res) => {
+    const { role } = req.body;
+    const id = parseInt(req.params.id, 10);
+
+    if (!role) {
+        return res.status(400).json({ message: 'Brak nowej roli.' });
+    }
+
+    try {
+        const result = await db.query(
+            'UPDATE users SET role = $1 WHERE id = $2',
+            [role, id]
+        );
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ message: 'Użytkownik nie istnieje' });
+        }
+
+        res.status(200).json({ message: 'Rola zmieniona.' });
+
+    } catch (err) {
+        console.error('Błąd bazy danych przy zmianie roli:', err);
+        res.status(500).json({ message: 'Błąd bazy danych.' });
+    }
+});
+
+app.put('/admin/users/:id/branch', authenticateAdmin, async (req, res) => {
     const userId = parseInt(req.params.id);
     const { branch } = req.body;
 
-    db.query('UPDATE users SET branch = ? WHERE id = ?', [branch, userId], (err) => {
-        if (err) return res.status(500).json({ message: 'Błąd bazy danych' });
-        res.status(200).json({ message: 'Oddział użytkownika zaktualizowany pomyślnie' });
-    });
+    if (!branch) {
+        return res.status(400).json({ message: 'Brak wartości "branch"' });
+    }
+
+    try {
+        const result = await db.query(
+            `UPDATE "Users" SET branch = $1 WHERE id = $2`,
+            [branch, userId]
+        );
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ message: 'Użytkownik nie istnieje' });
+        }
+
+        return res.status(200).json({ message: 'Oddział użytkownika został zmieniony', branch });
+
+    } catch (err) {
+        console.error('Błąd aktualizacji branch:', err);
+        return res.status(500).json({ message: 'Błąd bazy danych' });
+    }
 });
 
-app.put('/admin/users/:id/block', authenticateAdmin, (req, res) => {
-    const userId = parseInt(req.params.id);
+app.put('/admin/users/:id/block', authenticateAdmin, async (req, res) => {
+    const userId = parseInt(req.params.id, 10);
     const { isBlocked } = req.body;
 
-    db.query('UPDATE users SET isBlocked = ? WHERE id = ?', [isBlocked, userId], (err) => {
-        if (err) return res.status(500).json({ message: 'Błąd bazy danych' });
-        res.status(200).json({ message: isBlocked ? 'Użytkownik zablokowany' : 'Użytkownik odblokowany' });
-    });
+    try {
+        await db.query(
+            'UPDATE "Users" SET "isBlocked" = $1 WHERE id = $2',
+            [isBlocked, userId]
+        );
+
+        res.status(200).json({
+            message: isBlocked ? 'Użytkownik zablokowany' : 'Użytkownik odblokowany'
+        });
+
+    } catch (err) {
+        console.error('Błąd bazy danych:', err);
+        res.status(500).json({ message: 'Błąd bazy danych' });
+    }
 });
 
-app.delete('/admin/users/:id', authenticateUser, (req, res) => {
-    const userId = req.params.id;
+app.delete('/admin/users/:id', authenticateUser, async (req, res) => {
+    const userId = parseInt(req.params.id, 10);
+    const client = await db.connect();
 
-    const getEmail = 'SELECT email FROM users WHERE id = ?';
-    db.query(getEmail, [userId], (err, results) => {
-        if (err) {
-            console.error('Błąd podczas pobierania emaila użytkownika:', err);
-            return res.status(500).json({ message: 'Błąd serwera' });
-        }
-        if (results.length === 0) {
+    try {
+        // pobierz email użytkownika
+        const userResult = await client.query(
+            'SELECT email FROM users WHERE id = $1',
+            [userId]
+        );
+
+        if (userResult.rows.length === 0) {
+            client.release();
             return res.status(404).json({ message: 'Nie znaleziono użytkownika' });
         }
 
-        const userEmail = results[0].email;
+        const userEmail = userResult.rows[0].email;
 
-        db.beginTransaction((err) => {
-            if (err) {
-                console.error('Błąd przy rozpoczęciu transakcji:', err);
-                return res.status(500).json({ message: 'Błąd transakcji' });
-            }
+        // --- TRANSAKCJA ---
+        await client.query('BEGIN');
 
-            const queries = [
-                [
-                    `DELETE FROM comment_likes 
-                    WHERE comment_id IN (
-                        SELECT id FROM comments WHERE author_email = ?
-                    )`, [userEmail]
-                ],
-                ['DELETE FROM comment_likes WHERE user_email = ?', [userEmail]],
-                ['DELETE FROM user_votes WHERE user_email = ?', [userEmail]],
-                ['DELETE FROM comments WHERE author_email = ?', [userEmail]],
-                ['DELETE FROM ideas WHERE author_email = ?', [userEmail]],
-                ['DELETE FROM problems WHERE author_email = ?', [userEmail]],
-                ['DELETE FROM users WHERE id = ?', [userId]],
-            ];
+        // 1. Usuń lajki komentarzy powiązane z komentarzami usera
+        await client.query(
+            `
+            DELETE FROM comment_likes 
+            WHERE comment_id IN (
+                SELECT id FROM "Comments" WHERE author_email = $1
+            )
+            `,
+            [userEmail]
+        );
 
-            const executeNext = (index = 0) => {
-                if (index >= queries.length) {
-                    return db.commit((err) => {
-                        if (err) {
-                            console.error('Błąd przy commit:', err);
-                            return db.rollback(() => res.status(500).json({ message: 'Błąd commit' }));
-                        }
-                        return res.status(200).json({ message: 'Użytkownik i dane powiązane zostały usunięte.' });
-                    });
-                }
+        // 2. Usuń inne lajki wykonane przez niego
+        await client.query(
+            'DELETE FROM comment_likes WHERE user_email = $1',
+            [userEmail]
+        );
 
-                const [sql, params] = queries[index];
-                db.query(sql, params, (err) => {
-                    if (err) {
-                        console.error(`Błąd zapytania SQL: ${sql}`, err);
-                        return db.rollback(() => res.status(500).json({ message: 'Błąd podczas usuwania danych użytkownika' }));
-                    }
-                    executeNext(index + 1);
-                });
-            };
+        // 3. Usuń głosy użytkownika
+        await client.query(
+            'DELETE FROM user_votes WHERE user_email = $1',
+            [userEmail]
+        );
 
-            executeNext();
-        });
-    });
+        // 4. Usuń komentarze
+        await client.query(
+            'DELETE FROM "Comments" WHERE author_email = $1',
+            [userEmail]
+        );
+
+        // 5. Usuń pomysły
+        await client.query(
+            'DELETE FROM "Local_ideas" WHERE author_email = $1',
+            [userEmail]
+        );
+
+        // 6. Usuń problemy
+        await client.query(
+            'DELETE FROM "General_ideas" WHERE author_email = $1',
+            [userEmail]
+        );
+
+        // 7. Usuń użytkownika
+        await client.query(
+            'DELETE FROM "Users" WHERE id = $1',
+            [userId]
+        );
+
+        // Commit
+        await client.query('COMMIT');
+        client.release();
+
+        res.status(200).json({ message: 'Użytkownik i wszystkie dane powiązane zostały usunięte.' });
+
+    } catch (err) {
+        console.error("Błąd podczas usuwania użytkownika:", err);
+
+        await client.query('ROLLBACK');
+        client.release();
+
+        res.status(500).json({ message: 'Błąd podczas usuwania danych użytkownika' });
+    }
 });
 
-app.get('/admin/users', authenticateAdmin, (req, res) => {
-    db.query('SELECT id, email, role, name, surname, branch, isVerified, isBlocked FROM users', (err, results) => {
-        if (err) return res.status(500).json({ message: 'Błąd bazy danych' });
-        res.status(200).json(results);
-    });
+app.get('/admin/users/status', authenticateUser, async (req, res) => {
+    const userEmail = req.user.email;
+
+    try {
+        const result = await db.query(
+            'SELECT "isBlocked" FROM "Users" WHERE email = $1',
+            [userEmail]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ message: 'Użytkownik nie znaleziony.' });
+        }
+
+        res.status(200).json({ isBlocked: result.rows[0].isBlocked });
+
+    } catch (err) {
+        console.error("Błąd przy pobieraniu statusu użytkownika:", err);
+        res.status(500).json({ message: 'Błąd bazy danych' });
+    }
 });
 
 app.post('/changePassword', authenticateUser,
@@ -1043,12 +1182,19 @@ app.post('/changePassword', authenticateUser,
         });
     });
 
-app.get('/admin/users/status', authenticateUser, (req, res) => {
-    const userEmail = req.user.email;
-    db.query('SELECT isBlocked FROM users WHERE email = ?', [userEmail], (err, results) => {
-        if (err || results.length === 0) return res.status(404).json({ message: 'Użytkownik nie znaleziony.' });
-        res.status(200).json({ isBlocked: results[0].isBlocked });
-    });
+app.get('/admin/users', authenticateAdmin, async (req, res) => {
+    try {
+        const result = await db.query(
+            `SELECT id, email, role, name, surname, branch, "isVerified", "isBlocked" 
+             FROM "Users"`
+        );
+
+        res.status(200).json(result.rows);
+
+    } catch (err) {
+        console.error("Błąd bazy danych:", err);
+        res.status(500).json({ message: 'Błąd bazy danych' });
+    }
 });
 
 app.post('/comments', (req, res) => {
@@ -1059,7 +1205,7 @@ app.post('/comments', (req, res) => {
         return res.status(400).json({ message: 'Brakuje wymaganych danych' });
     }
 
-    const sql = 'INSERT INTO comments (item_id, item_type, parent_id, author_email, content) VALUES (?, ?, ?, ?, ?)';
+    const sql = 'INSERT INTO "Comments" (item_id, item_type, parent_id, author_email, content) VALUES (?, ?, ?, ?, ?)';
     db.query(sql, [item_id, item_type, parent_id || null, author_email, content], (err) => {
         if (err) return res.status(500).json({ message: 'Błąd bazy danych' });
         res.status(201).json({ message: 'Komentarz dodany pomyślnie' });
@@ -1076,7 +1222,7 @@ app.get('/comments', (req, res) => {
 
     const sql = `
         SELECT c.*, COUNT(l.comment_id) AS likes
-        FROM comments c
+        FROM "Comments" c
         LEFT JOIN comment_likes l ON c.id = l.comment_id
         WHERE c.item_id = ? AND c.item_type = ?
         GROUP BY c.id
@@ -1085,7 +1231,7 @@ app.get('/comments', (req, res) => {
 
     db.query(sql, [item_id, item_type], (err, results) => {
         if (err) {
-            console.error('Błąd bazy danych (SELECT comments):', err);
+            console.error('Błąd bazy danych (SELECT "Comments"):', err);
             return res.status(500).json({ message: 'Błąd bazy danych przy pobieraniu komentarzy' });
         }
 
@@ -1149,11 +1295,11 @@ app.post('/comments/:id/like', authenticateUser, (req, res) => {
             return res.status(400).json({ message: 'Już polubiłeś ten komentarz.' });
         }
 
-        const insertQuery = 'INSERT INTO comment_likes (comment_id, user_email) VALUES (?, ?)';
+        const insertQuery = 'INSERT INTO "Comment_likes (comment_id, user_email) VALUES (?, ?)';
         db.query(insertQuery, [commentId, userEmail], (err2) => {
             if (err2) return res.status(500).json({ message: 'Błąd zapisu polubienia.' });
 
-            const updateLikes = 'UPDATE comments SET likes = likes + 1 WHERE id = ?';
+            const updateLikes = 'UPDATE "Comments" SET likes = likes + 1 WHERE id = ?';
             db.query(updateLikes, [commentId], (err3) => {
                 if (err3) return res.status(500).json({ message: 'Błąd aktualizacji liczby polubień.' });
 
@@ -1177,7 +1323,7 @@ app.delete('/comments/:id/like', authenticateUser, (req, res) => {
             return res.status(400).json({ message: 'Nie masz polubienia na tym komentarzu.' });
         }
 
-        const updateLikes = 'UPDATE comments SET likes = likes - 1 WHERE id = ? AND likes > 0';
+        const updateLikes = 'UPDATE "Comments" SET likes = likes - 1 WHERE id = ? AND likes > 0';
         db.query(updateLikes, [commentId], (err2) => {
             if (err2) return res.status(500).json({ message: 'Błąd aktualizacji liczby polubień.' });
 
@@ -1223,7 +1369,7 @@ app.delete('/admin/comments/:id', async (req, res) => {
             return ids;
         };
 
-        db.query('SELECT id, parent_id FROM comments', (err2, allComments) => {
+        db.query('SELECT id, parent_id FROM "Comments"', (err2, allComments) => {
             if (err2) {
                 console.error("Błąd przy pobieraniu komentarzy:", err2);
                 return res.status(500).json({ message: 'Błąd przy pobieraniu komentarzy' });
@@ -1238,7 +1384,7 @@ app.delete('/admin/comments/:id', async (req, res) => {
                     return res.status(500).json({ message: 'Błąd podczas usuwania lajków komentarzy' });
                 }
 
-                db.query(`DELETE FROM comments WHERE id IN (${placeholders})`, idsToDelete, (err3) => {
+                db.query(`DELETE FROM "Comments" WHERE id IN (${placeholders})`, idsToDelete, (err3) => {
                     if (err3) {
                         console.error("Błąd podczas usuwania komentarzy:", err3);
                         return res.status(500).json({ message: 'Błąd podczas usuwania komentarzy' });
@@ -1254,7 +1400,7 @@ app.delete('/admin/comments/:id', async (req, res) => {
 app.get('/admin/comments', (req, res) => {
     const sql = `
         SELECT id, item_id, item_type, parent_id, author_email, content, created_at
-        FROM comments
+        FROM "Comments"
         ORDER BY created_at DESC
     `;
 

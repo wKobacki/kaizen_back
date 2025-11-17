@@ -1,0 +1,1 @@
+//okreslenie poziomu dostepu przy rozbijaniu na grupyi userów
