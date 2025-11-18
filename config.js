@@ -2,6 +2,7 @@ require('dotenv').config();
 
 module.exports = {
     APP_PORT: process.env.PORT,
+    API_ROUTE: process.env.API_ROUTE,
     POSTGRES_DB_HOST: process.env.DB_HOST,
     POSTGRE_DB_NAME: process.env.DB_NAME,
     POSTGRES_DB_USER: process.env.DB_USER,
