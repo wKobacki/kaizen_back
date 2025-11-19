@@ -1,4 +1,4 @@
-const exporess = require('express');
+const express = require('express');
 const sql =require('./db.js');
 
 const getUserDetails = async (req, res) => {
@@ -24,11 +24,11 @@ const getUserDetails = async (req, res) => {
 const updateUserDetails = async (req, res) => {
     try {
         const userId = req.params?.id;
-        if(!userid) return res.status(400).json({ message: 'User ID is required' });
+        if(!userId) return res.status(400).json({ message: 'User ID is required' });
 
-        const { isBloceked, brnach, role } = req.body;
+        const { isBlocked, branch, role } = req.body;
 
-        if( !isBloceked && !brnach && !role ) 
+        if( !isBlocked && !branch && !role ) 
             return res.status(400).json({message: 'At least one field is empty'});
 
         let query = 'UPDATE users SET ';
@@ -63,7 +63,7 @@ const deleteUser = async (req, res) => {
         const userId = req.params?.id;
         if (!userId) return res.status(400).json({ message: 'User ID is required' });
 
-        await sql`
+        const user = await sql`
             DELETE FROM "Users"
             WHERE id = ${userId}
             RETURNING id

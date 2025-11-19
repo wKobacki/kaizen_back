@@ -1,5 +1,5 @@
 const sql = require('./db');
-const sendPasswordResetEmail = require('./mailer');
+const sendPasswordResetEmail = require('./mailerController');
 const bcrypt = require("bcrypt");
 
 const generateVerificationCode = () => {

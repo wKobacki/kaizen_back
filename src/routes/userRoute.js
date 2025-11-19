@@ -1,20 +1,16 @@
-const exporess = require('express');
-const router = exporess.Router();
+const express = require('express');
+const router = express.Router();
 const userController = require('../controllers/userController');
 const verifyJWT = require('../middleware/verifyJWT');
 const handleNewUser = require('../controllers/registerController');
-const verifyUser = require('../middleware/verifyCredentials');
-const { get } = require('./refreshRoute');
-const { getUserDetails, updateUserDetails, deleteUser } = userController;
 
-router.route('/:id')
-    .get(getUserDetails)
-    .put(updateUserDetails)
-    .delete(deleteUser);
-
-router.route('/')
-    .post(handleNewUser);
+router.post('/', handleNewUser);
 
 router.use(verifyJWT);
+
+router.route('/:id')
+    .get(userController.getUserDetails)
+    .put(userController.updateUserDetails)
+    .delete(userController.deleteUser);
 
 module.exports = router;
