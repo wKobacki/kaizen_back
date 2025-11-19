@@ -10,7 +10,9 @@ router.use(verifyJWT);
 
 router.route('/:id')
     .get(userController.getUserDetails)
-    .put(userController.updateUserDetails)
+    .put(userController.updateUserRole)
+    .put(userController.updateUserBranch)
+    .put(userController.updateUserBlockStatus)
     .delete(userController.deleteUser);
 
 module.exports = router;

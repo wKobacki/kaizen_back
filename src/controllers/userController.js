@@ -7,8 +7,8 @@ const getUserDetails = async (req, res) => {
         if (!userId) return res.status(400).json({ message: 'User ID is required' });
 
         const user = await sql`
-            SELECT id, email, role, name, surname, branch, isVerified, isBlocked 
-            FROM users
+            SELECT id, email, role, name, surname, branch, "isVerified", "isBlocked" 
+            FROM "Users"
             WHERE id = ${userId}
         `;
 
@@ -17,44 +17,88 @@ const getUserDetails = async (req, res) => {
         return res.json(user[0]);
     } catch (error) {
         console.error(error);
-        return res.status(500).json({ message: 'Błąd serwera' });
+        return res.status(500).json({ message: 'Internal server error' });
     }
 };
 
-const updateUserDetails = async (req, res) => {
+const updateUserRole = async (req, res) => {
     try {
         const userId = req.params?.id;
         if(!userId) return res.status(400).json({ message: 'User ID is required' });
 
-        const { isBlocked, branch, role } = req.body;
+        const { role } = req.body;
 
-        if( !isBlocked && !branch && !role ) 
-            return res.status(400).json({message: 'At least one field is empty'});
+        if(!role ) 
+            return res.status(400).json({message: 'Role is required'});
 
-        let query = 'UPDATE users SET ';
-        let params = [];
-        let setFields = [];
+        const updatedUser = await sql`
+            UPDATE "Users"
+            SET role = ${role}
+            WHERE id = ${userId}
+            RETURNING id
+        `;
 
-        if (brnach) {
-            setFields.push(`branch = ${sql(brnach)}`);
-        }
+        if (updatedUser.length === 0) return res.status(404).json({ message: 'User not found' });
 
-        if (role) {
-            setFields.push(`role = ${sql(role)}`);
-        }
-
-        if (isBloceked) {
-            setFields.push(`isBlocked = ${sql(isBloceked)}`);
-        }
-
-        query += setFields.join(', ') + ` WHERE id = ${sql(userId)} RETURNING id, username, email, avatar_filename`;
-
-        const updatedUser = await sql`${sql(query)}`;
-
-        return res.json(updatedUser[0]);
+        return res.status(200).json({message: "User role updated successfully"});
     } catch (error) {
         console.error(error);
-        return res.status(500).json({ message: 'Błąd serwera' });
+        return res.status(500).json({ message: 'Internal server error' });
+    }
+}
+
+const updateUserBranch = async (req, res) => {
+    try {
+        const userId = req.params?.id;
+        if (!userId) {
+            return res.status(400).json({ message: 'User ID is required' });
+        }
+
+        const { branch } = req.body;
+        if (!branch) {
+            return res.status(400).json({ message: 'Branch is required' });
+        }
+
+        const updatedUser = await sql`
+            UPDATE users
+            SET branch = ${branch}
+            WHERE id = ${userId}
+            RETURNING id
+        `;
+
+        if (updatedUser.length === 0) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        return res.status(200).json({message: "User branch updated successfully"});
+
+    } catch (error) {
+        console.error('updateUserBranch error:', error);
+        return res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+const updateUserBlockStatus = async (req, res) => {
+    try {
+        const userId = req.params?.id;
+        if (!userId) return res.status(400).json({ message: 'User ID is required' });
+
+        const { isBlocked } = req.body;
+        if (!isBlocked) return res.status(400).json({ message: 'isBlocked status is required' });
+
+        const updatedUser = await sql`
+            UPDATE users
+            SET "isBlocked" = ${isBlocked}
+            WHERE id = ${userId}
+            RETURNING id
+        `;
+
+        if (updatedUser.length === 0) return res.status(404).json({ message: 'User not found' });
+
+        return res.status(200).json({message: "User block status updated successfully"});
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({ message: 'Internal server error' });
     }
 }
 
@@ -79,6 +123,8 @@ const deleteUser = async (req, res) => {
 
 module.exports = {
     getUserDetails,
-    updateUserDetails,
+    updateUserRole,
+    updateUserBranch,
+    updateUserBlockStatus,
     deleteUser
 };

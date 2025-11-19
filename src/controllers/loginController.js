@@ -10,8 +10,6 @@ const handleLogin = async (req, res) => {
         if (!email || !password) {
             return res.status(400).json({ message: 'Email and password are required' });
         }
-
-        // szukamy użytkownika
         const foundUser = await sql`
             SELECT id, email, password
             FROM "Users"
@@ -24,14 +22,12 @@ const handleLogin = async (req, res) => {
 
         const user = foundUser[0];
 
-        // sprawdzenie hasła
         const match = await bcrypt.compare(password, user.password);
 
         if (!match) {
             return res.status(401).json({ message: 'Invalid email or password' });
         }
 
-        // tworzymy tokeny
         const accessToken = jwt.sign(
             { email: user.email },
             ACCESS_TOKEN_SECRET,
@@ -44,21 +40,18 @@ const handleLogin = async (req, res) => {
             { expiresIn: '1d' }
         );
 
-        // zapis refresha w DB
         await sql`
             UPDATE "Users"
             SET refresh_token = ${refreshToken}
             WHERE email = ${email}
         `;
 
-        // ustawiamy cookie
         res.cookie('jwt', refreshToken, {
             httpOnly: true,
-            secure: false,  // ustawiasz na true w produkcji (HTTPS)
+            secure: false,  // in prod true
             maxAge: 24 * 60 * 60 * 1000,
         });
 
-        // zwracamy odpowiedź
         return res.json({
             uid: user.id,
             accessToken

@@ -7,7 +7,7 @@ const {
     POSTGRES_DB_PORT
 } = require('../../config');
 
-// konfiguracja połączenia
+// Configuration DB connection
 const sql = postgres({
     host: POSTGRES_DB_HOST,
     port: POSTGRES_DB_PORT,
@@ -16,20 +16,20 @@ const sql = postgres({
     password: POSTGRES_DB_PASSWORD
 });
 
-// TEST POŁĄCZENIA Z BAZĄ
+// Test connection
 (async () => {
     try {
-        console.log('🔄 Próba połączenia z bazą danych...');
+        console.log('Attempting to connect to the database...');
         
         const result = await sql`SELECT NOW()`;
         
-        console.log(`✅ Połączono z bazą danych! Serwer PostgreSQL działa.`);
-        console.log(`🕒 Aktualny czas DB: ${result[0].now}`);
-        console.log(`📌 Host: ${POSTGRES_DB_HOST}`);
-        console.log(`📌 Baza: ${POSTGRES_DB_NAME}`);
-        console.log(`📌 Użytkownik: ${POSTGRES_DB_USER}`);
+        console.log(`Connected to the database! PostgreSQL server is running.`);
+        console.log(`Current time: ${result[0].now}`);
+        console.log(`Host: ${POSTGRES_DB_HOST}`);
+        console.log(`Database: ${POSTGRES_DB_NAME}`);
+        console.log(`User: ${POSTGRES_DB_USER}`);
     } catch (err) {
-        console.error('❌ Błąd połączenia z bazą danych PostgreSQL!');
+        console.error('Error during database connection');
         console.error(err.message);
     }
 })();
