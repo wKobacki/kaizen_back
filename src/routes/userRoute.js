@@ -8,7 +8,10 @@ router.post('/', handleNewUser);
 
 router.use(verifyJWT);
 
-router.route('/:id')
+router.route('admin/')
+    .get(userController.getUsers);
+
+router.route('admin/:id')
     .get(userController.getUserDetails)
     .put(userController.updateUserRole)
     .put(userController.updateUserBranch)

@@ -97,7 +97,7 @@ function authenticateUser(req, res, next) {
         return res.status(401).json({ message: 'Brak uwierzytelnienia' });
     }
 
-    db.query('SELECT * FROM "Users" WHERE email = $1', [userEmail], (err, result) => {
+    db.query('SELECT * FROM "users" WHERE email = $1', [userEmail], (err, result) => {
         if (err) {
             console.error('Błąd podczas sprawdzania użytkownika:', err);
             return res.status(500).json({ message: 'Błąd serwera przy uwierzytelnieniu' });
@@ -120,7 +120,7 @@ function authenticateAdmin(req, res, next) {
         return res.status(401).json({ message: 'Brak uwierzytelnienia' });
     }
 
-    db.query('SELECT * FROM "Users" WHERE email = $1', [userEmail], (err, result) => {
+    db.query('SELECT * FROM users WHERE email = $1', [userEmail], (err, result) => {
         if (err || result.rows.length === 0) {
             return res.status(403).json({ message: 'Brak dostępu' });
         }
@@ -323,7 +323,7 @@ app.post('/login',
     const { email, password } = req.body;
 
     try {
-      const result = await db.query('SELECT * FROM "Users" WHERE email = $1', [email]);
+      const result = await db.query('SELECT * FROM users WHERE email = $1', [email]);
 
       if (result.rows.length === 0) {
         return res.status(401).json({ message: 'Nieprawidłowy e-mail lub hasło' });
@@ -454,7 +454,7 @@ app.post('/submitIdea', upload.array('images', 3), authenticateUser,
         }
 
         const sqlQuery = `
-            INSERT INTO "General_ideas"
+            INSERT INTO "general_ideas"
             (title, department, description, solution, images, status, votes, "createdAt", author_email, "isPublished", archived)
             VALUES ($1, $2, $3, $4, $5, 'pending', 0, NOW(), $6, FALSE, FALSE)
         `;
@@ -613,7 +613,7 @@ app.get('/ideas', async (req, res) => {
     const { status, archived } = req.query;
 
     try {
-        let sqlQuery = `SELECT * FROM "General_ideas" WHERE "isPublished" = true`;
+        let sqlQuery = `SELECT * FROM "general_ideas" WHERE "isPublished" = true`;
         const queryParams = [];
         let paramIndex = 1;
 
@@ -666,10 +666,10 @@ app.get('/ideas', async (req, res) => {
         const countQuery = `
             SELECT COUNT(*) AS voteCount
             FROM user_votes
-            JOIN "General_ideas" ON user_votes.item_id = "General_ideas".id
+            JOIN "general_ideas" ON user_votes.item_id = "general_ideas".id
             WHERE user_votes.user_email = $1 
               AND user_votes.item_type = 'idea'
-              AND "General_ideas".status = 'in_voting'
+              AND "general_ideas".status = 'in_voting'
         `;
         const countResult = await db.query(countQuery, [userEmail]);
 
@@ -684,65 +684,83 @@ app.get('/ideas', async (req, res) => {
     }
 });
 
-app.post('/ideas/:id/vote', authenticateUser, (req, res) => {
+app.post('/ideas/:id/vote', authenticateUser, async (req, res) => {
     const ideaId = req.params.id;
     const userEmail = req.user.email;
 
-    db.query('SELECT author_email, votes FROM ideas WHERE id = ?', [ideaId], (err, ideaResults) => {
-        if (err) {
-            console.error('Błąd SELECT idea:', err);
-            return res.status(500).json({ success: false, message: 'Błąd podczas pobierania pomysłu' });
-        }
+    try {
+        // 1. Pobranie pomysłu
+        const ideaQuery = `
+            SELECT author_email, votes
+            FROM general_ideas
+            WHERE id = $1
+        `;
 
-        if (ideaResults.length === 0) {
+        const ideaResult = await db.query(ideaQuery, [ideaId]);
+
+        if (ideaResult.rows.length === 0) {
             return res.status(404).json({ success: false, message: 'Idea not found' });
         }
 
-        const idea = ideaResults[0];
+        const idea = ideaResult.rows[0];
+
         if (idea.author_email === userEmail) {
-            return res.status(403).json({ success: false, message: 'Nie można oddać głosu na własny pomysł' });
+            return res.status(403).json({
+                success: false,
+                message: 'Nie można oddać głosu na własny pomysł'
+            });
         }
 
+        // 2. Sprawdzenie, czy użytkownik już głosował
         const checkQuery = `
-            SELECT * FROM user_votes 
-            WHERE item_id = ? AND user_email = ? AND item_type = 'idea'
+            SELECT 1 FROM user_votes
+            WHERE item_id = $1 AND user_email = $2 AND item_type = 'idea'
         `;
 
-        db.query(checkQuery, [ideaId, userEmail], (err, voteResults) => {
-            if (err) {
-                console.error('Błąd SELECT vote:', err);
-                return res.status(500).json({ success: false, message: 'Błąd podczas sprawdzania głosu' });
-            }
+        const voteResult = await db.query(checkQuery, [ideaId, userEmail]);
+        const voteExists = voteResult.rows.length > 0;
 
-            const voteExists = voteResults.length > 0;
-            const newVoteCount = voteExists ? idea.votes - 1 : idea.votes + 1;
+        // 3. Przygotowanie wartości głosów
+        const newVoteCount = voteExists
+            ? Number(idea.votes) - 1
+            : Number(idea.votes) + 1;
 
-            const voteQuery = voteExists
-                ? 'DELETE FROM user_votes WHERE item_id = ? AND user_email = ? AND item_type = "idea"'
-                : 'INSERT INTO user_votes (item_id, user_email, item_type, created_at) VALUES (?, ?, "idea", NOW())';
+        // 4. Wstawianie lub usuwanie głosu
+        const voteQuery = voteExists
+            ? `
+                DELETE FROM user_votes
+                WHERE item_id = $1 AND user_email = $2 AND item_type = 'idea'
+            `
+            : `
+                INSERT INTO user_votes (item_id, user_email, item_type, created_at)
+                VALUES ($1, $2, 'idea', NOW())
+            `;
 
-            db.query(voteQuery, [ideaId, userEmail], (err) => {
-                if (err) {
-                    console.error('Błąd INSERT/DELETE vote:', err);
-                    return res.status(500).json({ success: false, message: 'Błąd podczas aktualizacji głosu' });
-                }
+        await db.query(voteQuery, [ideaId, userEmail]);
 
-                db.query('UPDATE ideas SET votes = ? WHERE id = ?', [newVoteCount, ideaId], (err) => {
-                    if (err) {
-                        console.error('Błąd UPDATE votes:', err);
-                        return res.status(500).json({ success: false, message: 'Błąd podczas zapisu liczby głosów' });
-                    }
+        // 5. Aktualizacja liczby głosów
+        const updateQuery = `
+            UPDATE general_ideas
+            SET votes = $1
+            WHERE id = $2
+        `;
 
-                    return res.status(200).json({
-                        success: true,
-                        message: 'Głosowanie zakończone sukcesem',
-                        voted: !voteExists,
-                        totalVotes: newVoteCount
-                    });
-                });
-            });
+        await db.query(updateQuery, [newVoteCount, ideaId]);
+
+        return res.status(200).json({
+            success: true,
+            message: 'Głosowanie zakończone sukcesem',
+            voted: !voteExists,
+            totalVotes: newVoteCount
         });
-    });
+
+    } catch (err) {
+        console.error('Błąd w /ideas/:id/vote:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Błąd podczas głosowania na pomysł'
+        });
+    }
 });
 
 app.post('/problems/:id/vote', authenticateUser, (req, res) => {
@@ -815,7 +833,7 @@ app.get('/admin/ideas', async (req, res) => {
         // GENERAL IDEAS
         const sqlGeneral = `
             SELECT *, 'idea' AS type 
-            FROM "General_ideas"
+            FROM "general_ideas"
             WHERE archived = $1
         `;
         const generalResult = await db.query(sqlGeneral, [archivedValue]);
@@ -862,7 +880,7 @@ app.put('/admin/:type/:id/status', authenticateAdmin, async (req, res) => {
 
     const table =
         type === 'ideas'
-            ? `"General_ideas"`
+            ? `"general_ideas"`
             : `"Local_ideas"`;
 
     const publishColumn =
@@ -925,7 +943,7 @@ app.delete('/admin/ideas/:id', authenticateAdmin, async (req, res) => {
 
     try {
         const result = await db.query(
-            'DELETE FROM "General_ideas" WHERE id = $1',
+            'DELETE FROM "general_ideas" WHERE id = $1',
             [ideaId]
         );
 
@@ -953,7 +971,7 @@ app.put('/admin/:type/:id/archive', authenticateAdmin, async (req, res) => {
 
     const table =
         type === 'ideas'
-            ? `"General_ideas"`
+            ? `"general_ideas"`
             : `"Local_ideas"`;
 
     try {
@@ -1010,7 +1028,7 @@ app.put('/admin/users/:id/branch', authenticateAdmin, async (req, res) => {
 
     try {
         const result = await db.query(
-            `UPDATE "Users" SET branch = $1 WHERE id = $2`,
+            `UPDATE users SET branch = $1 WHERE id = $2`,
             [branch, userId]
         );
 
@@ -1032,7 +1050,7 @@ app.put('/admin/users/:id/block', authenticateAdmin, async (req, res) => {
 
     try {
         await db.query(
-            'UPDATE "Users" SET "isBlocked" = $1 WHERE id = $2',
+            'UPDATE users SET "isBlocked" = $1 WHERE id = $2',
             [isBlocked, userId]
         );
 
@@ -1072,7 +1090,7 @@ app.delete('/admin/users/:id', authenticateUser, async (req, res) => {
             `
             DELETE FROM comment_likes 
             WHERE comment_id IN (
-                SELECT id FROM "Comments" WHERE author_email = $1
+                SELECT id FROM "comments" WHERE author_email = $1
             )
             `,
             [userEmail]
@@ -1092,7 +1110,7 @@ app.delete('/admin/users/:id', authenticateUser, async (req, res) => {
 
         // 4. Usuń komentarze
         await client.query(
-            'DELETE FROM "Comments" WHERE author_email = $1',
+            'DELETE FROM "comments" WHERE author_email = $1',
             [userEmail]
         );
 
@@ -1104,13 +1122,13 @@ app.delete('/admin/users/:id', authenticateUser, async (req, res) => {
 
         // 6. Usuń problemy
         await client.query(
-            'DELETE FROM "General_ideas" WHERE author_email = $1',
+            'DELETE FROM "general_ideas" WHERE author_email = $1',
             [userEmail]
         );
 
         // 7. Usuń użytkownika
         await client.query(
-            'DELETE FROM "Users" WHERE id = $1',
+            'DELETE FROM users WHERE id = $1',
             [userId]
         );
 
@@ -1135,7 +1153,7 @@ app.get('/admin/users/status', authenticateUser, async (req, res) => {
 
     try {
         const result = await db.query(
-            'SELECT "isBlocked" FROM "Users" WHERE email = $1',
+            'SELECT "isBlocked" FROM users WHERE email = $1',
             [userEmail]
         );
 
@@ -1186,7 +1204,7 @@ app.get('/admin/users', authenticateAdmin, async (req, res) => {
     try {
         const result = await db.query(
             `SELECT id, email, role, name, surname, branch, "isVerified", "isBlocked" 
-             FROM "Users"`
+             FROM users`
         );
 
         res.status(200).json(result.rows);
@@ -1197,22 +1215,29 @@ app.get('/admin/users', authenticateAdmin, async (req, res) => {
     }
 });
 
-app.post('/comments', (req, res) => {
+app.post('/comments', async (req, res) => {
     const { item_id, item_type, parent_id, content } = req.body;
-    const author_email = req.headers['x-user-email']
+    const author_email = req.headers['x-user-email'];
 
     if (!item_id || !item_type || !content) {
         return res.status(400).json({ message: 'Brakuje wymaganych danych' });
     }
 
-    const sql = 'INSERT INTO "Comments" (item_id, item_type, parent_id, author_email, content) VALUES (?, ?, ?, ?, ?)';
-    db.query(sql, [item_id, item_type, parent_id || null, author_email, content], (err) => {
-        if (err) return res.status(500).json({ message: 'Błąd bazy danych' });
+    const sql = `
+        INSERT INTO "comments" (item_id, item_type, parent_id, author_email, content)
+        VALUES ($1, $2, $3, $4, $5)
+    `;
+
+    try {
+        await db.query(sql, [item_id, item_type, parent_id || null, author_email, content]);
         res.status(201).json({ message: 'Komentarz dodany pomyślnie' });
-    });
+    } catch (err) {
+        console.error('DB error INSERT Comments:', err);
+        res.status(500).json({ message: 'Błąd bazy danych' });
+    }
 });
 
-app.get('/comments', (req, res) => {
+app.get('/comments', async (req, res) => {
     const { item_id, item_type } = req.query;
     const userEmail = req.headers['x-user-email'] || null;
 
@@ -1222,18 +1247,15 @@ app.get('/comments', (req, res) => {
 
     const sql = `
         SELECT c.*, COUNT(l.comment_id) AS likes
-        FROM "Comments" c
+        FROM "comments" c
         LEFT JOIN comment_likes l ON c.id = l.comment_id
-        WHERE c.item_id = ? AND c.item_type = ?
+        WHERE c.item_id = $1 AND c.item_type = $2
         GROUP BY c.id
         ORDER BY c.created_at ASC
     `;
 
-    db.query(sql, [item_id, item_type], (err, results) => {
-        if (err) {
-            console.error('Błąd bazy danych (SELECT "Comments"):', err);
-            return res.status(500).json({ message: 'Błąd bazy danych przy pobieraniu komentarzy' });
-        }
+    try {
+        const results = (await db.query(sql, [item_id, item_type])).rows;
 
         const commentIds = results.map(c => c.id);
         if (commentIds.length === 0) return res.json([]);
@@ -1243,93 +1265,111 @@ app.get('/comments', (req, res) => {
                 .filter(c => c.parent_id === parentId)
                 .map(c => ({
                     ...c,
+                    likes: Number(c.likes) || 0,
                     replies: attachReplies(comments, c.id)
                 }));
 
         if (!userEmail) {
-            const withDefaultFlags = results.map(c => ({
+            const withFlags = results.map(c => ({
                 ...c,
                 likedByCurrentUser: false,
                 likes: Number(c.likes) || 0
             }));
 
-            return res.json(attachReplies(withDefaultFlags));
+            return res.json(attachReplies(withFlags));
         }
 
         const likeQuery = `
             SELECT comment_id
             FROM comment_likes
-            WHERE user_email = ? AND comment_id IN (?)
+            WHERE user_email = $1 AND comment_id = ANY($2)
         `;
 
-        db.query(likeQuery, [userEmail, commentIds], (err2, likedResults) => {
-            if (err2) {
-                console.error('Błąd przy sprawdzaniu polubień:', err2);
-                return res.status(500).json({ message: 'Błąd przy sprawdzaniu polubień' });
-            }
+        const liked = (await db.query(likeQuery, [userEmail, commentIds])).rows;
+        const likedIds = liked.map(l => l.comment_id);
 
-            const likedCommentIds = likedResults.map(row => row.comment_id);
+        const withFlags = results.map(c => ({
+            ...c,
+            likedByCurrentUser: likedIds.includes(c.id),
+            likes: Number(c.likes) || 0
+        }));
 
-            const resultsWithFlags = results.map(c => ({
-                ...c,
-                likedByCurrentUser: likedCommentIds.includes(c.id),
-                likes: Number(c.likes) || 0
-            }));
+        return res.json(attachReplies(withFlags));
 
-            return res.json(attachReplies(resultsWithFlags));
-        });
-    });
+    } catch (err) {
+        console.error('DB error SELECT Comments:', err);
+        res.status(500).json({ message: 'Błąd bazy danych' });
+    }
 });
 
-app.post('/comments/:id/like', authenticateUser, (req, res) => {
+app.post('/comments/:id/like', authenticateUser, async (req, res) => {
     const commentId = req.params.id;
     const userEmail = req.user.email;
 
     if (!userEmail) return res.status(401).json({ message: 'Brak e-maila użytkownika.' });
 
-    const checkQuery = 'SELECT * FROM comment_likes WHERE comment_id = ? AND user_email = ?';
-    db.query(checkQuery, [commentId, userEmail], (err, result) => {
-        if (err) return res.status(500).json({ message: 'Błąd bazy danych.' });
+    try {
+        const checkQuery = `
+            SELECT 1 FROM comment_likes
+            WHERE comment_id = $1 AND user_email = $2
+        `;
+        const alreadyLiked = await db.query(checkQuery, [commentId, userEmail]);
 
-        if (result.length > 0) {
+        if (alreadyLiked.rows.length > 0) {
             return res.status(400).json({ message: 'Już polubiłeś ten komentarz.' });
         }
 
-        const insertQuery = 'INSERT INTO "Comment_likes (comment_id, user_email) VALUES (?, ?)';
-        db.query(insertQuery, [commentId, userEmail], (err2) => {
-            if (err2) return res.status(500).json({ message: 'Błąd zapisu polubienia.' });
+        const insertQuery = `
+            INSERT INTO comment_likes (comment_id, user_email)
+            VALUES ($1, $2)
+        `;
+        await db.query(insertQuery, [commentId, userEmail]);
 
-            const updateLikes = 'UPDATE "Comments" SET likes = likes + 1 WHERE id = ?';
-            db.query(updateLikes, [commentId], (err3) => {
-                if (err3) return res.status(500).json({ message: 'Błąd aktualizacji liczby polubień.' });
+        const updateLikes = `
+            UPDATE "comments"
+            SET likes = likes + 1
+            WHERE id = $1
+        `;
+        await db.query(updateLikes, [commentId]);
 
-                return res.status(200).json({ message: 'Polubiono komentarz.' });
-            });
-        });
-    });
+        res.status(200).json({ message: 'Polubiono komentarz.' });
+
+    } catch (err) {
+        console.error('DB error LIKE comment:', err);
+        res.status(500).json({ message: 'Błąd zapisu polubienia.' });
+    }
 });
 
-app.delete('/comments/:id/like', authenticateUser, (req, res) => {
+app.delete('/comments/:id/like', authenticateUser, async (req, res) => {
     const commentId = req.params.id;
     const userEmail = req.user.email;
 
     if (!userEmail) return res.status(401).json({ message: 'Brak e-maila użytkownika.' });
 
-    const deleteLike = 'DELETE FROM comment_likes WHERE comment_id = ? AND user_email = ?';
-    db.query(deleteLike, [commentId, userEmail], (err, result) => {
-        if (err) return res.status(500).json({ message: 'Błąd usuwania polubienia.' });
+    try {
+        const deleteQuery = `
+            DELETE FROM comment_likes
+            WHERE comment_id = $1 AND user_email = $2
+        `;
+        const result = await db.query(deleteQuery, [commentId, userEmail]);
 
-        if (result.affectedRows === 0) {
+        if (result.rowCount === 0) {
             return res.status(400).json({ message: 'Nie masz polubienia na tym komentarzu.' });
         }
 
-        const updateLikes = 'UPDATE "Comments" SET likes = likes - 1 WHERE id = ? AND likes > 0';
-        db.query(updateLikes, [commentId], (err2) => {
-            if (err2) return res.status(500).json({ message: 'Błąd aktualizacji liczby polubień.' });
+        const updateQuery = `
+            UPDATE "comments"
+            SET likes = GREATEST(likes - 1, 0)
+            WHERE id = $1
+        `;
+        await db.query(updateQuery, [commentId]);
 
-            return res.status(200).json({ message: 'Polubienie cofnięte.' });
-        });
-    });
+        res.status(200).json({ message: 'Polubienie cofnięte.' });
+
+    } catch (err) {
+        console.error('DB error DELETE like:', err);
+        res.status(500).json({ message: 'Błąd usuwania polubienia.' });
+    }
 });
 
 app.delete('/admin/comments/:id', async (req, res) => {
@@ -1369,7 +1409,7 @@ app.delete('/admin/comments/:id', async (req, res) => {
             return ids;
         };
 
-        db.query('SELECT id, parent_id FROM "Comments"', (err2, allComments) => {
+        db.query('SELECT id, parent_id FROM "comments"', (err2, allComments) => {
             if (err2) {
                 console.error("Błąd przy pobieraniu komentarzy:", err2);
                 return res.status(500).json({ message: 'Błąd przy pobieraniu komentarzy' });
@@ -1384,7 +1424,7 @@ app.delete('/admin/comments/:id', async (req, res) => {
                     return res.status(500).json({ message: 'Błąd podczas usuwania lajków komentarzy' });
                 }
 
-                db.query(`DELETE FROM "Comments" WHERE id IN (${placeholders})`, idsToDelete, (err3) => {
+                db.query(`DELETE FROM "comments" WHERE id IN (${placeholders})`, idsToDelete, (err3) => {
                     if (err3) {
                         console.error("Błąd podczas usuwania komentarzy:", err3);
                         return res.status(500).json({ message: 'Błąd podczas usuwania komentarzy' });
@@ -1400,7 +1440,7 @@ app.delete('/admin/comments/:id', async (req, res) => {
 app.get('/admin/comments', (req, res) => {
     const sql = `
         SELECT id, item_id, item_type, parent_id, author_email, content, created_at
-        FROM "Comments"
+        FROM "comments"
         ORDER BY created_at DESC
     `;
 

@@ -22,4 +22,24 @@ const verifyUser = async (req, res, next) => {
     }
 }
 
-module.exports = {verifyUser};
+const verifyAdmin = async (req, res, next) => {
+    try {
+        if (!req.user) {
+            return res.status(401).json({ message: 'Unauthorized' });
+        }
+
+        // Sprawdzamy rolę
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({ message: 'Access denied: admin only' });
+        }
+
+        // Jeśli admin → wpuszczamy dalej
+        next();
+
+    } catch (err) {
+        console.error('verifyAdmin error:', err);
+        return res.status(500).json({ message: 'Server error in verifyAdmin' });
+    }
+};
+
+module.exports = {verifyUser, verifyAdmin};

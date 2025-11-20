@@ -121,10 +121,28 @@ const deleteUser = async (req, res) => {
     }
 }
 
+const getUsers = async (req, res) => {
+    try {
+        const evryUser = await sql`
+        SELECT name, surname, email
+        FROM users
+        `;
+
+        if(!evryUser) return res.status(403).json({message: 'Users not found'});
+
+        return res.status(200).json({message: 'Success', result: evryUser});
+
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({message: 'Internal server error'});
+    }
+}
+
 module.exports = {
     getUserDetails,
     updateUserRole,
     updateUserBranch,
     updateUserBlockStatus,
-    deleteUser
+    deleteUser,
+    getUsers
 };
