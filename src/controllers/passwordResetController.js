@@ -14,7 +14,7 @@ const handlePasswordReset = async (req, res) => {
     try {
         const result = await sql`
         SELECT email, name, surname
-        FROM "Users"
+        FROM users
         WHERE email=${email}`;
 
         const user = result[0];
@@ -24,7 +24,7 @@ const handlePasswordReset = async (req, res) => {
         const verificationCode = generateVerificationCode();
 
         await sql`
-        UPDATE "Users" 
+        UPDATE users
         SET verification_code = ${verificationCode}
         WHERE email = ${email}
         `;
@@ -47,7 +47,7 @@ const restorePassword = async (req, res) => {
     try {
         const result = await sql`
         SELECT id
-        FROM "Users"
+        FROM users
         WHERE verification_code = ${verificationCode}
         `;
 
@@ -58,7 +58,7 @@ const restorePassword = async (req, res) => {
         const hashedPassword = await bcrypt.hash(newPassword, 12);
 
         await sql`
-        UPDATE "Users"
+        UPDATE users
         SET hashed_passwrod = ${hashedPassword}, verification_code= NULL
         `;
 
@@ -78,7 +78,7 @@ const resetPassword =  async (req, res) => {
     try {
         const result = await sql`
         SELECT * 
-        FROM "Users"
+        FROM users
         WHERE id = ${userId}
         `;
 
@@ -93,7 +93,7 @@ const resetPassword =  async (req, res) => {
         const hashedPassword = await bcrypt.hash(newPassword, 12);
 
         await sql`
-        UPDATE "Users"
+        UPDATE users
         SET hashed_password = ${hashedPassword}
         WHERE id = ${userId}`
 

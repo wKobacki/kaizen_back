@@ -10,7 +10,7 @@ const handleRefreshToken = async (req, res) => {
         const refreshToken = cookies.jwt;
         const foundUser = await sql`
             SELECT id, email, refresh_token
-            FROM "Users"
+            FROM users
             WHERE refresh_token = ${refreshToken}
             `;
         

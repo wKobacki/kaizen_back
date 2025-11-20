@@ -7,7 +7,7 @@ const verifyUser = async (req, res, next) => {
 
         const [foundUser] = await sql`
             SELECT id, email
-            FROM "Users"
+            FROM users
             WHERE id = ${id}
         `
 

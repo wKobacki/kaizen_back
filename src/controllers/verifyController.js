@@ -8,7 +8,7 @@ const verifyUser = async (req, res, next) => {
 
         const users = await sql`
             SELECT id, isVerified, verificationCode
-            FROM "Users"
+            FROM users
             WHERE email = ${email}
         `;
 
@@ -20,7 +20,7 @@ const verifyUser = async (req, res, next) => {
 
         if (user.verificationCode === code) {
             await sql`
-                UPDATE "Users"
+                UPDATE users
                 SET isVerified = true, verificationCode = NULL
                 WHERE id = ${user.id}
             `;

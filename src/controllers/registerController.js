@@ -25,7 +25,7 @@ const handleNewUser = async (req, res) => {
         if (branch!=='Warszawa' || branch!=='Skierniewice' || branch!=='Lyszkowice' || branch!=='Rakoniewice' || branch!=='Gliwice' || branch!=='Teresin' || branch!=='Nowy Tomysl') return res.status(400).json({message: "invalid branch"});
 
         const existingUser = await sql`
-            SELECT id from "Users"
+            SELECT id from users
             WHERE email = ${email}
         `
         if (existingUser.length > 0) return res.status(409).json({ message: 'User with this email already exists' });
@@ -37,7 +37,7 @@ const handleNewUser = async (req, res) => {
         console.log(verificationCode);// 
 
         const result = await sql`
-            INSERT INTO "Users" (email, password, role, name, surname, branch, isVerified, isBlocked, verificationCode)
+            INSERT INTO users (email, password, role, name, surname, branch, isVerified, isBlocked, verificationCode)
             VALUES (${email}, ${hashedPassword}, 'User', ${name}, ${surname}, ${branch}, false, false, ${verificationCode})
             RETURNING id
         `;

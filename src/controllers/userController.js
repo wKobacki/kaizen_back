@@ -8,11 +8,11 @@ const getUserDetails = async (req, res) => {
 
         const user = await sql`
             SELECT id, email, role, name, surname, branch, "isVerified", "isBlocked" 
-            FROM "Users"
+            FROM users
             WHERE id = ${userId}
         `;
 
-        if (user.length === 0) return res.status(404).json({ message: 'User not found' });
+        if (!user) return res.status(404).json({ message: 'User not found' });
 
         return res.json(user[0]);
     } catch (error) {
@@ -32,7 +32,7 @@ const updateUserRole = async (req, res) => {
             return res.status(400).json({message: 'Role is required'});
 
         const updatedUser = await sql`
-            UPDATE "Users"
+            UPDATE users
             SET role = ${role}
             WHERE id = ${userId}
             RETURNING id
@@ -108,7 +108,7 @@ const deleteUser = async (req, res) => {
         if (!userId) return res.status(400).json({ message: 'User ID is required' });
 
         const user = await sql`
-            DELETE FROM "Users"
+            DELETE FROM users
             WHERE id = ${userId}
             RETURNING id
             `;

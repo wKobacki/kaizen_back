@@ -12,7 +12,7 @@ const handleLogin = async (req, res) => {
         }
         const foundUser = await sql`
             SELECT id, email, password
-            FROM "Users"
+            FROM users
             WHERE email = ${email}
         `;
 
@@ -41,7 +41,7 @@ const handleLogin = async (req, res) => {
         );
 
         await sql`
-            UPDATE "Users"
+            UPDATE user
             SET refresh_token = ${refreshToken}
             WHERE email = ${email}
         `;

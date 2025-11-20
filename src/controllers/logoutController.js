@@ -10,7 +10,7 @@ const handleLogout = async (req, res) => {
 
         const foundUser = await sql`
             SELECT refresh_token
-            FROM "Users"
+            FROM users
             WHERE refresh_token = ${refreshToken}
         `;
 
@@ -21,7 +21,7 @@ const handleLogout = async (req, res) => {
 
         await sql`
         SELECT refresh_token
-        FROM "Users"
+        FROM users
         WHERE refresh_token = ${refreshToken}
         `;
 

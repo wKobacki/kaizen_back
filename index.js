@@ -9,6 +9,7 @@ const logoutRouter = require('./src/routes/logoutRouter');
 const userRouter = require('./src/routes/userRoute');
 const restoreRouter = require('./src/routes/passwordRestore');
 const resetRouter = require('./src/routes/passwordReset');
+const ideasRouter = require('./src/routes/ideaRoute')
 
 const { APP_PORT, API_ROUTE } = require('./config');
 
@@ -33,6 +34,7 @@ app.use(`${API_ROUTE}/logout`, logoutRouter);
 app.use(`${API_ROUTE}/users`, userRouter);
 app.use(`${API_ROUTE}/password-restore`, restoreRouter);
 app.use(`${API_ROUTE}/password-reset`, resetRouter);
+app.use(`${API_ROUTE}/ideas`, ideasRouter);
 
 // GLOBAL ERROR HANDLER
 app.use((err, req, res, next) => {
