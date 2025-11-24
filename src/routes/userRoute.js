@@ -10,15 +10,18 @@ router.post('/', handleNewUser);
 router.use(verifyJWT);
 router.use(verifyAdmin);
 
-router.route('/admin')
-    .get(userController.getUsers);
+router.get("/admin", userController.getUsers);
 
-router.route('/admin/:id')
-    .get(userController.getUserDetails)
-    .put(userController.updateUserRole)
-    .put(userController.updateUserBranch)
-    .put(userController.updateUserBlockStatus)
-    .put(userController.blockUser)
-    .delete(userController.deleteUser);
+router.get("/admin/:id", userController.getUserDetails);
+
+router.put("/admin/:id/role", userController.updateUserRole);
+
+router.put("/admin/:id/branch", userController.updateUserBranch);
+
+router.put("/admin/:id/block", userController.updateUserBlockStatus);
+
+router.put("/admin/:id/suspend", userController.blockUser);
+
+router.delete("/admin/:id", userController.deleteUser);
 
 module.exports = router;
