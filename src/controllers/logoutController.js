@@ -20,9 +20,9 @@ const handleLogout = async (req, res) => {
         }
 
         await sql`
-        SELECT refresh_token
-        FROM users
-        WHERE refresh_token = ${refreshToken}
+            SELECT refresh_token
+            FROM users
+            WHERE refresh_token = ${refreshToken}
         `;
 
         res.clearCookie('jwt', {secure: true, httpOnly: true});

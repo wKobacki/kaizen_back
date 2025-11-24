@@ -2,19 +2,13 @@ const express = require('express');
 const router = express.Router();
 const ideaController = require('../controllers/ideaController');
 const verifyJWT = require('../middleware/verifyJWT');
-const verifyAdmin = require('../middleware/verifyAdmin');
 
 router.use(verifyJWT);
 
+router.get('/', ideaController.getAllIdeas);
 
-router.route('/')
-    .post(ideaController.createIdea)
-    .get(ideaController.getUserIdeas);
+router.get('/:id', ideaController.getIdeaDetails);
 
-router.route('/:id')
-    .get(ideaController.getIdeaDetails);
-
-router.route('/admin')
-    .get(verifyAdmin, ideaController.allIdeas);
+router.post('/:id', ideaController.createIdea);
 
 module.exports = router;

@@ -1,83 +1,87 @@
-const global_roles = {
-    admin: 0,
-    country_director: 1,
-    user: 2
-}
+const GLOBAL_ROLES = Object.freeze({
+    ADMIN: "ADMIN",
+    COUNTRY_DIRECTOR: "COUNTRY_DIRECTOR",
+    USER: "USER"
+});
 
-const human_resources = {
-    head: 0,
-    member: 1
-};
+const HR = Object.freeze({
+    HEAD: "HR_HEAD",
+    SPECIALIST: "HR_SPECIALIST",
+    MEMBER: "HR_MEMBER"
+});
 
-const it = {
-    head: 0,
-    wms_specialist: 1,
-    infra_team: 2,
-    it_engineer: 3,
-    tms_specialist: 4,
-    project_manager: 5
-};
+const IT = Object.freeze({
+    DIRECTOR: "IT_DIRECTOR",
+    COUNTRY_MANAGER: "IT_COUNTRY_MANAGER",
+    WMS_SPECIALIST: "IT_WMS_SPECIALIST",
+    INFRA_ADMIN: "IT_INFRA_ADMIN",
+    ENGINEER: "IT_ENGINEER",
+    TMS_SPECIALIST: "IT_TMS_SPECIALIST",
+    PROJECT_MANAGER: "IT_PROJECT_MANAGER"
+});
 
-const engineering = {
-    head: 0,
-    engineer: 1
-};
+const ENGINEERING = Object.freeze({
+    HEAD: "ENG_HEAD",
+    ENGINEER: "ENG_ENGINEER"
+});
 
-const facilities = {
-    head: 0,
-    leader: 1
-};
+const FACILITIES = Object.freeze({
+    MANAGER: "FAC_MANAGER",
+    TEAM_LEADER: "FAC_LEADER"
+});
 
-const operations = {
-    head: 0,
-    operations_manager: 1,
-    member: 2,
-    administration: 3
-};
+const OPERATIONS = Object.freeze({
+    HEAD: "OPS_HEAD",
+    MANAGER: "OPS_MANAGER",
+    SPECIALIST: "OPS_SPECIALIST",
+    ADMIN: "OPS_ADMIN"
+});
 
-const sales = {
-    head: 0,
-    member: 1
-};
+const SALES = Object.freeze({
+    DIRECTOR: "SALES_DIRECTOR",
+    MANAGER: "SALES_MANAGER",
+    REPRESENTATIVE: "SALES_REP",
+    SPECIALIST: "SALES_SPECIALIST"
+});
 
-const transportation = {
-    head: 0,
-    country_forwarder: 1,
-    international_forwarder: 2,
-    fleet_manager: 3,
-    member: 4
-};
+const TRANSPORT = Object.freeze({
+    HEAD: "TRANSPORT_HEAD",
+    FORWARDER_DOMESTIC: "FORWARDER_DOMESTIC",
+    FORWARDER_INTERNATIONAL: "FORWARDER_INTERNATIONAL",
+    GROUPAGE_NETWORK_MANAGER: "GROUPAGE_MANAGER",
+    FLEET_MANAGER: "FLEET_MANAGER",
+    MEMBER: "TRANSPORT_MEMBER"
+});
 
-const finance = {
-    head: 0,
-    member: 1
-};
+const FINANCE = Object.freeze({
+    CONTROLLER: "FIN_CONTROLLER",
+    ANALYST: "FIN_ANALYST",
+});
 
-const key_account_manager = {
-    head: 0,
-    read_write: 1,
-    read_only: 2
-};
+const KAM = Object.freeze({
+    DIRECTOR: "KAM_DIRECTOR",
+    MANAGER: "KAM_MANAGER",
+    READ_WRITE: "KAM_RW",
+    READ_ONLY: "KAM_RO",
+});
 
-const controlling = {
-    head: 0,
-    business_analyst: 1
-};
+const CONTROLLING = Object.freeze({
+    MANAGER: "CTRL_MANAGER",
+    ANALYST: "CTRL_ANALYST"
+});
 
 module.exports = {
-    roles: {
-        global: global_roles,
-        departments: {
-            human_resources,
-            it,
-            engineering,
-            facilities,
-            operations,
-            sales,
-            transportation,
-            finance,
-            key_account_manager,
-            controlling,
-        }
+    GLOBAL_ROLES,
+    DEPARTMENTS: {
+        HR,
+        IT,
+        ENGINEERING,
+        FACILITIES,
+        OPERATIONS,
+        SALES,
+        TRANSPORT,
+        FINANCE,
+        KAM,
+        CONTROLLING,
     }
 };

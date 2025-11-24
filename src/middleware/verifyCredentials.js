@@ -1,4 +1,4 @@
-const sql = require('../database/db');
+const sql = require('../controllers/db');
 
 const verifyUser = async (req, res, next) => {
     try {
@@ -28,12 +28,10 @@ const verifyAdmin = async (req, res, next) => {
             return res.status(401).json({ message: 'Unauthorized' });
         }
 
-        // Sprawdzamy rolę
         if (req.user.role !== 'admin') {
             return res.status(403).json({ message: 'Access denied: admin only' });
         }
 
-        // Jeśli admin → wpuszczamy dalej
         next();
 
     } catch (err) {

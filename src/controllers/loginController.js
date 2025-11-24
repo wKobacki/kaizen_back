@@ -11,7 +11,7 @@ const handleLogin = async (req, res) => {
             return res.status(400).json({ message: 'Email and password are required' });
         }
         const foundUser = await sql`
-            SELECT id, email, password
+            SELECT id, email, password, role
             FROM users
             WHERE email = ${email}
         `;
@@ -29,19 +29,27 @@ const handleLogin = async (req, res) => {
         }
 
         const accessToken = jwt.sign(
-            { email: user.email },
+            { 
+                id: user.id,
+                email: user.email,
+                role: user.role
+            },
             ACCESS_TOKEN_SECRET,
             { expiresIn: '15m' }
         );
 
         const refreshToken = jwt.sign(
-            { email: user.email },
+            { 
+                id: user.id,
+                email: user.email,
+                role: user.role
+            },
             REFRESH_TOKEN_SECRET,
-            { expiresIn: '1d' }
+            { expiresIn: '15m' }
         );
 
         await sql`
-            UPDATE user
+            UPDATE users
             SET refresh_token = ${refreshToken}
             WHERE email = ${email}
         `;

@@ -336,10 +336,6 @@ app.post('/login',
         return res.status(401).json({ message: 'Nieprawidłowy e-mail lub hasło' });
       }
 
-      if (!user.isVerified) {
-        return res.status(403).json({ message: 'Proszę zweryfikować adres e-mail, aby aktywować konto.' });
-      }
-
       res.status(200).json({
         message: 'Logowanie zakończone sukcesem',
         user: {

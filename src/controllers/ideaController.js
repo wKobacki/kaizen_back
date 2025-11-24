@@ -1,6 +1,5 @@
 const express = require('express');
 const sql = require('./db.js');
-const { use } = require('react');
 
 const createIdea = async (req, res) => {
     try {
@@ -9,22 +8,30 @@ const createIdea = async (req, res) => {
             description,
             solution,
             images = [],
-            userId
+            userId,
+            status,
+            department
         } = req.body;
 
-        if (!title || !description || !solution || !userId)
+        if (!title || !description || !solution || !userId || !status || !department)
             return res.status(400).json({ message: 'Missing required fields' });
 
         const inserted = await sql`
-            INSERT INTO "Ideas" (title, description, solution, images, "userId")
+            INSERT INTO ideas (title, description, solution, images, user_id, status, department)
             VALUES (
                 ${title},
                 ${description},
                 ${solution},
-                ${JSON.stringify(images)},  
+                ${JSON.stringify(images)},
+                ${userId},
+                ${status},
+                ${department}
             )
             RETURNING id
         `;
+
+        if (!inserted)
+            return res.status(400).json({ message: 'There was some error during adding idea' });
 
         return res.status(201).json({
             message: 'Idea created successfully',
@@ -37,18 +44,11 @@ const createIdea = async (req, res) => {
     }
 };
 
-const getUserIdeas = async (req, res) => {
+const getAllIdeas = async (req, res) => {
     try {
-        const userId = req.params?.id;
-
-        if (!userId) {
-            return res.status(400).json({ message: 'User id required' });
-        }
-
         const results = await sql`
-            SELECT id, title, status
-            FROM "Ideas"
-            WHERE user_id = ${userId}
+            SELECT id, title, status, department
+            FROM ideas
         `;
 
         if (results.length === 0) {
@@ -68,14 +68,14 @@ const getUserIdeas = async (req, res) => {
 
 const getIdeaDetails = async (req, res) => {
     try {
-        const {userId, ideaId} = req.params;
+        const ideaId = req.params?.id;
 
-        if(!userId || !ideaId) return res.status(403).JSON({message: 'Both parameters are required'});
+        if(!ideaId) return res.status(403).json({message: 'All parameters are required'});
 
         const result = await sql`
-        SELECT id, title, description, solution, images
-        FROM ideas
-        WHERE id = ${ideaId} AND user_id = ${userId}
+            SELECT id, title, description, solution, images, status, department
+            FROM ideas
+            WHERE id = ${ideaId} 
         `;
 
         if(!result) return res.status(403).json({message: 'details for idea not found'});
@@ -88,27 +88,8 @@ const getIdeaDetails = async (req, res) => {
     }
 };
 
-const getAllIdeas = async (req, res) => {
-    try {
-        const allIdeas = await sql`
-        SELECT i.id, i.title, i.description, i.solution, i.images, i.created_at, u.mail
-        FROM ideas i 
-        JOIN users u ON i.user_id =u.id
-        `;
-
-        if(!allIdeas) return res.status(403).json({message: 'Ideas not found'});
-
-        return res.status(200).json({message: 'succes', result: allIdeas});
-    } catch(error) {
-        console.error(error);
-        return res.status(500).json({message: 'INternal server error'});
-    }
-}
-
-
 module.exports = {
     createIdea,
-    getUserIdeas,
-    getIdeaDetails,
-    getAllIdeas
+    getAllIdeas,
+    getIdeaDetails
 };

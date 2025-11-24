@@ -7,7 +7,7 @@ const getUserDetails = async (req, res) => {
         if (!userId) return res.status(400).json({ message: 'User ID is required' });
 
         const user = await sql`
-            SELECT id, email, role, name, surname, branch, "isVerified", "isBlocked" 
+            SELECT id, email, role, name, surname, branch, "is_verified", "is_blocked" 
             FROM users
             WHERE id = ${userId}
         `;
@@ -88,7 +88,7 @@ const updateUserBlockStatus = async (req, res) => {
 
         const updatedUser = await sql`
             UPDATE users
-            SET "isBlocked" = ${isBlocked}
+            SET "is_blocked" = ${isBlocked}
             WHERE id = ${userId}
             RETURNING id
         `;
@@ -107,12 +107,26 @@ const deleteUser = async (req, res) => {
         const userId = req.params?.id;
         if (!userId) return res.status(400).json({ message: 'User ID is required' });
 
-        const user = await sql`
-            DELETE FROM users
+        const targetUser = await sql`
+            SELECT * 
+            FROM users
             WHERE id = ${userId}
-            RETURNING id
+        `;
+        
+        if(!targetUser) return res.status(400).json({message: 'User not found'});
+
+        await sql`
+            DELETE FROM ideas
+            WHERE user_id = ${userId}
+        `;
+
+        const user = await sql`
+                DELETE FROM users
+                WHERE id = ${userId}
+                RETURNING id
             `;
-        if(user.length === 0) return res.status(404).json({ message: 'User not found' });
+
+        if(!user) return res.status(400).json({ message: 'User not found' });
 
         return res.json({ message: 'User deleted successfully' });
     } catch (error) {
@@ -124,8 +138,8 @@ const deleteUser = async (req, res) => {
 const getUsers = async (req, res) => {
     try {
         const evryUser = await sql`
-        SELECT name, surname, email
-        FROM users
+            SELECT name, surname, email
+            FROM users
         `;
 
         if(!evryUser) return res.status(403).json({message: 'Users not found'});
@@ -138,11 +152,35 @@ const getUsers = async (req, res) => {
     }
 }
 
+const blockUser = async (req, res) => {
+    try {
+        const {userId, status} = req.params;
+        if(!userId || !status) return res.status(400).json({message: 'Both parametrs are required'});
+
+        if(status !== false && status !== true) return res.status(400).json({message: 'Incorrect status'});
+        
+        const change = await sql`
+            UPDATE users
+            SET is_blocked = ${status}
+            WHERE user_id = ${userId};
+            RETURNING id
+        `;
+
+        if(!change) return res.status(400).json({message: "Status not changed"});
+
+        return res.status(200).json({message: 'Status updated'});
+    } catch(error) {
+        console.error(error);
+        return res.status(500).json({message: 'Internal server error'});
+    }
+}
+
 module.exports = {
     getUserDetails,
     updateUserRole,
     updateUserBranch,
     updateUserBlockStatus,
     deleteUser,
-    getUsers
+    getUsers,
+    blockUser
 };
