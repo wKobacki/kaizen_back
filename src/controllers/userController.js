@@ -7,7 +7,7 @@ const getUserDetails = async (req, res) => {
         if (!userId) return res.status(400).json({ message: 'User ID is required' });
 
         const user = await sql`
-            SELECT id, email, role, name, surname, branch, "is_verified", "is_blocked" 
+            SELECT id, email, role, name, surname, branch, "is_verified" 
             FROM users
             WHERE id = ${userId}
         `;
@@ -138,7 +138,7 @@ const deleteUser = async (req, res) => {
 const getUsers = async (req, res) => {
     try {
         const evryUser = await sql`
-            SELECT name, surname, email
+            SELECT id, name, surname, email
             FROM users
         `;
 
