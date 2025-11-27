@@ -6,9 +6,7 @@ const verifyJWT = require('../middleware/verifyJWT');
 router.use(verifyJWT);
 
 router.get('/', ideaController.getAllIdeas);
-
 router.get('/:id', ideaController.getIdeaDetails);
-
-router.post('/:id', ideaController.createIdea);
+router.post('/', ideaController.createIdea);
 
 module.exports = router;

@@ -1,5 +1,6 @@
 const express = require('express');
 const sql =require('./db.js');
+const bcrypt = require('bcrypt');
 
 const getUserDetails = async (req, res) => {
     try {
@@ -78,30 +79,6 @@ const updateUserBranch = async (req, res) => {
     }
 };
 
-const updateUserBlockStatus = async (req, res) => {
-    try {
-        const userId = req.params?.id;
-        if (!userId) return res.status(400).json({ message: 'User ID is required' });
-
-        const { isBlocked } = req.body;
-        if (!isBlocked) return res.status(400).json({ message: 'isBlocked status is required' });
-
-        const updatedUser = await sql`
-            UPDATE users
-            SET "is_blocked" = ${isBlocked}
-            WHERE id = ${userId}
-            RETURNING id
-        `;
-
-        if (updatedUser.length === 0) return res.status(404).json({ message: 'User not found' });
-
-        return res.status(200).json({message: "User block status updated successfully"});
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ message: 'Internal server error' });
-    }
-}
-
 const deleteUser = async (req, res) => {
     try {
         const userId = req.params?.id;
@@ -152,35 +129,122 @@ const getUsers = async (req, res) => {
     }
 }
 
-const blockUser = async (req, res) => {
+const getProfileInfo = async (req, res) => {
+    const userId = req.params?.id;
+    if(!userId) return res.status(400).json({message: "User id is required"});
     try {
-        const {userId, status} = req.params;
-        if(!userId || !status) return res.status(400).json({message: 'Both parametrs are required'});
-
-        if(status !== false && status !== true) return res.status(400).json({message: 'Incorrect status'});
-        
-        const change = await sql`
-            UPDATE users
-            SET is_blocked = ${status}
-            WHERE user_id = ${userId};
-            RETURNING id
+        const profile = await sql`
+            SELECT id, name, surname, email, branch, supervisor
+            FROM users
+            WHERE id = ${userId}; 
         `;
 
-        if(!change) return res.status(400).json({message: "Status not changed"});
+        if(!profile) return res.status(400).json({status: failed, message: "Failed to download user from the database"});
 
-        return res.status(200).json({message: 'Status updated'});
-    } catch(error) {
+        return res.status(200).json({message: "Success", result: profile});
+    } catch (error) {
         console.error(error);
-        return res.status(500).json({message: 'Internal server error'});
+        return res.status(500).json({message: "Internal server error"})
     }
-}
+};
+
+const updateProfileInfo = async (req, res) => {
+    try {
+        const userId = req.params?.id;
+        if (!userId) return res.status(400).json({ message: "User ID is required" });
+
+        const { name, surname, email, branch, supervisor } = req.body;
+
+        const [existing] = await sql`
+            SELECT id FROM users WHERE id = ${userId}
+        `;
+
+        if (!existing) {
+            return res.status(404).json({ message: "User not found" });
+        }
+
+        if (supervisor) {
+            const [supervisorUser] = await sql`
+                SELECT id FROM users WHERE id = ${supervisor}
+            `;
+
+            if (!supervisorUser) {
+                return res.status(400).json({ message: "Supervisor does not exist" });
+            }
+
+            if (Number(supervisor) === Number(userId)) {
+                return res.status(400).json({ message: "User cannot be their own supervisor" });
+            }
+        }
+
+        await sql`
+            UPDATE users SET
+                name = ${name},
+                surname = ${surname},
+                email = ${email},
+                branch = ${branch},
+                supervisor = ${supervisor || null}
+            WHERE id = ${userId}
+        `;
+
+        return res.json({ message: "Profile updated successfully" });
+
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({ message: "Internal server error" });
+    }
+};
+
+const updateCurrentUserPassword = async (req, res) => {
+    try {
+        const userId = req.user.id; 
+        const { oldPassword, newPassword } = req.body;
+
+        if (!oldPassword || !newPassword) {
+            return res.status(400).json({ message: "Both old and new password are required" });
+        }
+
+        if(oldPassword === newPassword) return res.status(400).json({message: "new password can't be the same as the old one"});
+
+        const [user] = await sql`
+            SELECT password
+            FROM users
+            WHERE id = ${userId}
+        `;
+
+        if (!user) {
+            return res.status(404).json({ message: "User not found" });
+        }
+
+        const match = await bcrypt.compare(oldPassword, user.password);
+        if (!match) {
+            return res.status(401).json({ message: "Incorrect old password" });
+        }
+
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+        await sql`
+            UPDATE users
+            SET password = ${hashedPassword}
+            WHERE id = ${userId}
+        `;
+
+        return res.json({ message: "Password changed successfully" });
+
+    } catch (err) {
+        console.error("updateCurrentUserPassword error:", err);
+        return res.status(500).json({ message: "Internal server error" });
+    }
+};
+
 
 module.exports = {
     getUserDetails,
     updateUserRole,
     updateUserBranch,
-    updateUserBlockStatus,
     deleteUser,
     getUsers,
-    blockUser
+    getProfileInfo,
+    updateProfileInfo,
+    updateCurrentUserPassword
 };
