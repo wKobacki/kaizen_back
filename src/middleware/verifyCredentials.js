@@ -2,18 +2,17 @@ const sql = require('../controllers/db');
 
 const verifyUser = async (req, res, next) => {
     try {
-        const id = req.params?.id;
-        if(!id || id == 'ubdefined' || !Number.isInteger(Number.parseInt(id))) return res.status(400).json({ message: 'Invalid user ID' });
+        const id = Number(req.params.id);
 
-        const [foundUser] = await sql`
-            SELECT id, email
-            FROM users
-            WHERE id = ${id}
-        `
+        if (!id) return res.status(400).json({ message: 'Invalid user ID' });
 
-        if(!foundUser) return res.status(404).json({ message: 'User not found' });
+        const tokenUser = req.user; 
 
-        if(foundUser.email !== req.user) return res.status(403).json({ message: 'Forbidden' });
+        if (tokenUser.role === "admin") return next();
+
+        if (tokenUser.id !== id) {
+            return res.status(403).json({ message: 'Forbidden' });
+        }
 
         next();
     } catch (err) {

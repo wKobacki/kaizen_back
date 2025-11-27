@@ -2,23 +2,21 @@ const express = require('express');
 const router = express.Router();
 const userController = require('../controllers/userController');
 const verifyJWT = require('../middleware/verifyJWT');
-const { verifyAdmin } = require('../middleware/verifyCredentials');
+const { verifyAdmin, verifyUser } = require('../middleware/verifyCredentials');
 const handleNewUser = require('../controllers/registerController');
 
 router.post('/', handleNewUser);
 
 router.use(verifyJWT);
 
-router.use(verifyAdmin);
+router.get('/admin', verifyAdmin, userController.getUsers);
+router.get('/admin/:id', verifyAdmin, userController.getUserDetails);
+router.put('/admin/:id/role', verifyAdmin, userController.updateUserRole);
+router.put('/admin/:id/branch', verifyAdmin, userController.updateUserBranch);
+router.delete('/admin/:id', verifyAdmin, userController.deleteUser);
 
-router.get('/admin', userController.getUsers);
-router.get('/admin/:id', userController.getUserDetails);
-router.put('/admin/:id/role', userController.updateUserRole);
-router.put('/admin/:id/branch', userController.updateUserBranch);
-router.delete('/admin/:id', userController.deleteUser);
-
-router.get('/:id', userController.getProfileInfo);
-router.put('/:id', userController.updateProfileInfo);
-router.put('/:id/password', userController.updateCurrentUserPassword);
+router.get('/:id', verifyUser, userController.getProfileInfo);
+router.put('/:id', verifyUser, userController.updateProfileInfo);
+router.put('/:id/password', verifyUser, userController.updateCurrentUserPassword);
 
 module.exports = router;

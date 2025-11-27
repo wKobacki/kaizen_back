@@ -131,20 +131,36 @@ const getUsers = async (req, res) => {
 
 const getProfileInfo = async (req, res) => {
     const userId = req.params?.id;
-    if(!userId) return res.status(400).json({message: "User id is required"});
+    if (!userId) return res.status(400).json({ message: "User id is required" });
+
     try {
         const profile = await sql`
-            SELECT id, name, surname, email, branch, supervisor
-            FROM users
-            WHERE id = ${userId}; 
+            SELECT 
+                u.id, 
+                u.name, 
+                u.surname, 
+                u.email, 
+                u.branch, 
+                u.supervisor,
+                s.name AS supervisor_name,
+                s.surname AS supervisor_surname
+            FROM users u
+            LEFT JOIN users s
+                ON s.id = u.supervisor
+            WHERE u.id = ${userId};
         `;
 
-        if(!profile) return res.status(400).json({status: failed, message: "Failed to download user from the database"});
+        if (!profile || profile.length === 0)
+            return res.status(404).json({ message: "User not found" });
 
-        return res.status(200).json({message: "Success", result: profile});
+        return res.status(200).json({
+            message: "Success",
+            result: profile,
+        });
+
     } catch (error) {
         console.error(error);
-        return res.status(500).json({message: "Internal server error"})
+        return res.status(500).json({ message: "Internal server error" });
     }
 };
 
