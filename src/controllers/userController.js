@@ -8,9 +8,20 @@ const getUserDetails = async (req, res) => {
         if (!userId) return res.status(400).json({ message: 'User ID is required' });
 
         const user = await sql`
-            SELECT id, email, role, name, surname, branch, "is_verified" 
-            FROM users
-            WHERE id = ${userId}
+            SELECT 
+                u.id,
+                u.name,
+                u.surname,
+                u.email,
+                l.name AS location_name,
+                d.name AS department_name,
+                s.name AS supervisor_name,
+                s.surname AS supervisor_surname
+            FROM users u
+            LEFT JOIN users s ON s.id = u.supervisor
+            LEFT JOIN location l ON l.id = u.location_id
+            LEFT JOIN departments d ON d.id = u.department_id
+            WHERE u.id = ${userId};
         `;
 
         if (!user) return res.status(404).json({ message: 'User not found' });
@@ -55,14 +66,14 @@ const updateUserBranch = async (req, res) => {
             return res.status(400).json({ message: 'User ID is required' });
         }
 
-        const { branch } = req.body;
-        if (!branch) {
+        const { location } = req.body;
+        if (!location) {
             return res.status(400).json({ message: 'Branch is required' });
         }
 
         const updatedUser = await sql`
             UPDATE users
-            SET branch = ${branch}
+            SET location = ${location}
             WHERE id = ${userId}
             RETURNING id
         `;
@@ -71,7 +82,7 @@ const updateUserBranch = async (req, res) => {
             return res.status(404).json({ message: 'User not found' });
         }
 
-        return res.status(200).json({message: "User branch updated successfully"});
+        return res.status(200).json({message: "User location updated successfully"});
 
     } catch (error) {
         console.error('updateUserBranch error:', error);
@@ -140,7 +151,7 @@ const getProfileInfo = async (req, res) => {
                 u.name, 
                 u.surname, 
                 u.email, 
-                u.branch, 
+                u.location_id, 
                 u.supervisor,
                 s.name AS supervisor_name,
                 s.surname AS supervisor_surname
@@ -169,7 +180,7 @@ const updateProfileInfo = async (req, res) => {
         const userId = req.params?.id;
         if (!userId) return res.status(400).json({ message: "User ID is required" });
 
-        const { name, surname, email, branch, supervisor } = req.body;
+        const { name, surname, email, supervisor, department_id, location_id } = req.body;
 
         const [existing] = await sql`
             SELECT id FROM users WHERE id = ${userId}
@@ -198,9 +209,10 @@ const updateProfileInfo = async (req, res) => {
                 name = ${name},
                 surname = ${surname},
                 email = ${email},
-                branch = ${branch},
+                department_id = ${department_id},
+                location_id = ${location_id || null},
                 supervisor = ${supervisor || null}
-            WHERE id = ${userId}
+            WHERE id = ${userId}    
         `;
 
         return res.json({ message: "Profile updated successfully" });

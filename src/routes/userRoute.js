@@ -12,7 +12,7 @@ router.use(verifyJWT);
 router.get('/admin', verifyAdmin, userController.getUsers);
 router.get('/admin/:id', verifyAdmin, userController.getUserDetails);
 router.put('/admin/:id/role', verifyAdmin, userController.updateUserRole);
-router.put('/admin/:id/branch', verifyAdmin, userController.updateUserBranch);
+router.put('/admin/:id/location', verifyAdmin, userController.updateUserBranch);
 router.delete('/admin/:id', verifyAdmin, userController.deleteUser);
 
 router.get('/:id', verifyUser, userController.getProfileInfo);

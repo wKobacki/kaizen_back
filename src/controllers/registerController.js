@@ -8,9 +8,9 @@ const generateVerificationCode = () => {
 
 const handleNewUser = async (req, res) => {
     try {
-        const { email, password, name, surname, branch } = req.body;
+        const { email, password, name, surname, location } = req.body;
 
-        if (!email || !password || !name || !surname || !branch) {
+        if (!email || !password || !name || !surname || !location) {
             return res.status(400).json({ message: 'All fields are required' });
         }
 
@@ -22,7 +22,7 @@ const handleNewUser = async (req, res) => {
 
         if (surname.length > 200) return res.status(400).json({message: "too long surname"});
 
-        if (branch!=='Warszawa' || branch!=='Skierniewice' || branch!=='Lyszkowice' || branch!=='Rakoniewice' || branch!=='Gliwice' || branch!=='Teresin' || branch!=='Nowy Tomysl') return res.status(400).json({message: "invalid branch"});
+        if (location!=='Warszawa' || location!=='Skierniewice' || location!=='Lyszkowice' || location!=='Rakoniewice' || location!=='Gliwice' || location!=='Teresin' || location!=='Nowy Tomysl') return res.status(400).json({message: "invalid location"});
 
         const existingUser = await sql`
             SELECT id from users
@@ -37,8 +37,8 @@ const handleNewUser = async (req, res) => {
         console.log(verificationCode);// 
 
         const result = await sql`
-            INSERT INTO users (email, password, role, name, surname, branch, isVerified, isBlocked, verificationCode)
-            VALUES (${email}, ${hashedPassword}, 'User', ${name}, ${surname}, ${branch}, false, false, ${verificationCode})
+            INSERT INTO users (email, password, role, name, surname, location, isVerified, isBlocked, verificationCode)
+            VALUES (${email}, ${hashedPassword}, 'User', ${name}, ${surname}, ${location}, false, false, ${verificationCode})
             RETURNING id
         `;
 
