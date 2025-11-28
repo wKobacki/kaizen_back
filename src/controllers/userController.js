@@ -265,6 +265,56 @@ const updateCurrentUserPassword = async (req, res) => {
     }
 };
 
+const getManagers = async (req, res) => {
+    try {
+        const rows = await sql`
+            SELECT id, name, surname
+            FROM users
+            WHERE role IN ('manager', 'admin', 'superadmin')
+            ORDER BY surname ASC
+        `;
+
+        return res.json({ result: rows });
+
+    } catch (err) {
+        console.error("getManagers error:", err);
+        return res.status(500).json({ message: "Failed to load managers list" });
+    }
+};
+
+const getBranches = async (req, res) => {
+    try {
+        const rows = await sql`
+            SELECT id, name 
+            FROM departments
+            ORDER BY name ASC
+        `;
+
+        return res.json({ result: rows });
+
+    } catch (err) {
+        console.error("getBranches error:", err);
+        return res.status(500).json({ message: "Failed to load branches list" });
+    }
+};
+
+const getLocations = async (req, res) => {
+    try {
+        const rows = await sql`
+            SELECT id, name 
+            FROM location
+            ORDER BY name ASC
+        `;
+
+        return res.json({ result: rows });
+
+    } catch (err) {
+        console.error("getLocations error:", err);
+        return res.status(500).json({ message: "Failed to load locations list" });
+    }
+};
+
+
 
 module.exports = {
     getUserDetails,
@@ -274,5 +324,8 @@ module.exports = {
     getUsers,
     getProfileInfo,
     updateProfileInfo,
-    updateCurrentUserPassword
+    updateCurrentUserPassword,
+    getManagers,
+    getBranches,
+    getLocations
 };
