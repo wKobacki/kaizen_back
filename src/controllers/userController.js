@@ -147,17 +147,18 @@ const getProfileInfo = async (req, res) => {
     try {
         const profile = await sql`
             SELECT 
-                u.id, 
-                u.name, 
-                u.surname, 
-                u.email, 
-                u.location_id, 
-                u.supervisor,
+                u.id,
+                u.name,
+                u.surname,
+                u.email,
+                l.name AS location_name,
+                d.name AS department_name,
                 s.name AS supervisor_name,
                 s.surname AS supervisor_surname
             FROM users u
-            LEFT JOIN users s
-                ON s.id = u.supervisor
+            LEFT JOIN users s ON s.id = u.supervisor
+            LEFT JOIN location l ON l.id = u.location_id
+            LEFT JOIN departments d ON d.id = u.department_id
             WHERE u.id = ${userId};
         `;
 
@@ -210,8 +211,8 @@ const updateProfileInfo = async (req, res) => {
                 surname = ${surname},
                 email = ${email},
                 department_id = ${department_id},
-                location_id = ${location_id || null},
-                supervisor = ${supervisor || null}
+                location_id = ${location_id},
+                supervisor = ${supervisor}
             WHERE id = ${userId}    
         `;
 
