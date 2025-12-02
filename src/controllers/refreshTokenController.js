@@ -10,7 +10,7 @@ const handleRefreshToken = async (req, res) => {
         const refreshToken = cookies.jwt;
 
         const foundUser = await sql`
-            SELECT id, email, role, refresh_token
+            SELECT id, email, role_id, refresh_token
             FROM users
             WHERE refresh_token = ${refreshToken}
         `;
@@ -22,21 +22,20 @@ const handleRefreshToken = async (req, res) => {
 
             const accessToken = jwt.sign(
                 {
-                    id: decoded.id,
-                    email: decoded.email,
-                    role: decoded.role
+                    id: foundUser[0].id,
+                    email: foundUser[0].email,
+                    role_id: foundUser[0].role_id
                 },
                 ACCESS_TOKEN_SECRET,
                 { expiresIn: '15m' }
             );
 
-            res.json({ 
+            res.json({
                 uid: foundUser[0].id,
-                accessToken 
+                accessToken
             });
         });
     } catch (err) {
-        console.error(err);
         return res.sendStatus(500);
     }
 };

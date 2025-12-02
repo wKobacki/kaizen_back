@@ -1,5 +1,5 @@
 const express = require('express');
-const sql =require('./db.js');
+const sql = require('./db.js');
 const bcrypt = require('bcrypt');
 
 const getUserDetails = async (req, res) => {
@@ -13,6 +13,7 @@ const getUserDetails = async (req, res) => {
                 u.name,
                 u.surname,
                 u.email,
+                u.role_id,
                 l.name AS location_name,
                 d.name AS department_name,
                 s.name AS supervisor_name,
@@ -24,11 +25,10 @@ const getUserDetails = async (req, res) => {
             WHERE u.id = ${userId};
         `;
 
-        if (!user) return res.status(404).json({ message: 'User not found' });
+        if (user.length === 0) return res.status(404).json({ message: 'User not found' });
 
         return res.json(user[0]);
     } catch (error) {
-        console.error(error);
         return res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -36,56 +36,45 @@ const getUserDetails = async (req, res) => {
 const updateUserRole = async (req, res) => {
     try {
         const userId = req.params?.id;
-        if(!userId) return res.status(400).json({ message: 'User ID is required' });
+        const { role_id } = req.body;
 
-        const { role } = req.body;
+        if (!userId) return res.status(400).json({ message: 'User ID is required' });
+        if (!role_id) return res.status(400).json({ message: 'role_id is required' });
 
-        if(!role ) 
-            return res.status(400).json({message: 'Role is required'});
-
-        const updatedUser = await sql`
+        const updated = await sql`
             UPDATE users
-            SET role = ${role}
+            SET role_id = ${role_id}
             WHERE id = ${userId}
             RETURNING id
         `;
 
-        if (updatedUser.length === 0) return res.status(404).json({ message: 'User not found' });
+        if (updated.length === 0) return res.status(404).json({ message: 'User not found' });
 
-        return res.status(200).json({message: "User role updated successfully"});
+        return res.json({ message: "User role updated successfully" });
     } catch (error) {
-        console.error(error);
         return res.status(500).json({ message: 'Internal server error' });
     }
-}
+};
 
 const updateUserBranch = async (req, res) => {
     try {
         const userId = req.params?.id;
-        if (!userId) {
-            return res.status(400).json({ message: 'User ID is required' });
-        }
+        const { location_id } = req.body;
 
-        const { location } = req.body;
-        if (!location) {
-            return res.status(400).json({ message: 'Branch is required' });
-        }
+        if (!userId) return res.status(400).json({ message: 'User ID is required' });
+        if (!location_id) return res.status(400).json({ message: 'location_id is required' });
 
-        const updatedUser = await sql`
+        const updated = await sql`
             UPDATE users
-            SET location = ${location}
+            SET location_id = ${location_id}
             WHERE id = ${userId}
             RETURNING id
         `;
 
-        if (updatedUser.length === 0) {
-            return res.status(404).json({ message: 'User not found' });
-        }
+        if (updated.length === 0) return res.status(404).json({ message: 'User not found' });
 
-        return res.status(200).json({message: "User location updated successfully"});
-
+        return res.json({ message: "User location updated successfully" });
     } catch (error) {
-        console.error('updateUserBranch error:', error);
         return res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -95,62 +84,53 @@ const deleteUser = async (req, res) => {
         const userId = req.params?.id;
         if (!userId) return res.status(400).json({ message: 'User ID is required' });
 
-        const targetUser = await sql`
-            SELECT * 
-            FROM users
-            WHERE id = ${userId}
+        const existing = await sql`
+            SELECT id FROM users WHERE id = ${userId}
         `;
-        
-        if(!targetUser) return res.status(400).json({message: 'User not found'});
+        if (existing.length === 0) return res.status(404).json({ message: 'User not found' });
 
         await sql`
             DELETE FROM ideas
             WHERE user_id = ${userId}
         `;
 
-        const user = await sql`
-                DELETE FROM users
-                WHERE id = ${userId}
-                RETURNING id
-            `;
-
-        if(!user) return res.status(400).json({ message: 'User not found' });
+        await sql`
+            DELETE FROM users
+            WHERE id = ${userId}
+        `;
 
         return res.json({ message: 'User deleted successfully' });
     } catch (error) {
-        console.error(error);
-        return res.status(500).json({ message: 'Internal server error' });   
+        return res.status(500).json({ message: 'Internal server error' });
     }
-}
+};
 
 const getUsers = async (req, res) => {
     try {
-        const evryUser = await sql`
-            SELECT id, name, surname, email
+        const rows = await sql`
+            SELECT id, name, surname, email, role_id
             FROM users
+            ORDER BY surname ASC
         `;
 
-        if(!evryUser) return res.status(403).json({message: 'Users not found'});
-
-        return res.status(200).json({message: 'Success', result: evryUser});
-
+        return res.json({ message: 'Success', result: rows });
     } catch (error) {
-        console.error(error);
-        return res.status(500).json({message: 'Internal server error'});
+        return res.status(500).json({ message: 'Internal server error' });
     }
-}
+};
 
 const getProfileInfo = async (req, res) => {
-    const userId = req.params?.id;
-    if (!userId) return res.status(400).json({ message: "User id is required" });
-
     try {
+        const userId = req.params?.id;
+        if (!userId) return res.status(400).json({ message: "User id is required" });
+
         const profile = await sql`
             SELECT 
                 u.id,
                 u.name,
                 u.surname,
                 u.email,
+                u.role_id,
                 l.name AS location_name,
                 d.name AS department_name,
                 s.name AS supervisor_name,
@@ -162,16 +142,11 @@ const getProfileInfo = async (req, res) => {
             WHERE u.id = ${userId};
         `;
 
-        if (!profile || profile.length === 0)
+        if (profile.length === 0)
             return res.status(404).json({ message: "User not found" });
 
-        return res.status(200).json({
-            message: "Success",
-            result: profile,
-        });
-
+        return res.json({ message: "Success", result: profile });
     } catch (error) {
-        console.error(error);
         return res.status(500).json({ message: "Internal server error" });
     }
 };
@@ -186,23 +161,13 @@ const updateProfileInfo = async (req, res) => {
         const [existing] = await sql`
             SELECT id FROM users WHERE id = ${userId}
         `;
-
-        if (!existing) {
-            return res.status(404).json({ message: "User not found" });
-        }
+        if (!existing) return res.status(404).json({ message: "User not found" });
 
         if (supervisor) {
-            const [supervisorUser] = await sql`
-                SELECT id FROM users WHERE id = ${supervisor}
-            `;
-
-            if (!supervisorUser) {
-                return res.status(400).json({ message: "Supervisor does not exist" });
-            }
-
-            if (Number(supervisor) === Number(userId)) {
+            const [sup] = await sql`SELECT id FROM users WHERE id = ${supervisor}`;
+            if (!sup) return res.status(400).json({ message: "Supervisor does not exist" });
+            if (Number(supervisor) === Number(userId))
                 return res.status(400).json({ message: "User cannot be their own supervisor" });
-            }
         }
 
         await sql`
@@ -213,55 +178,44 @@ const updateProfileInfo = async (req, res) => {
                 department_id = ${department_id},
                 location_id = ${location_id},
                 supervisor = ${supervisor}
-            WHERE id = ${userId}    
+            WHERE id = ${userId}
         `;
 
         return res.json({ message: "Profile updated successfully" });
-
     } catch (error) {
-        console.error(error);
         return res.status(500).json({ message: "Internal server error" });
     }
 };
 
 const updateCurrentUserPassword = async (req, res) => {
     try {
-        const userId = req.user.id; 
+        const userId = req.user.id;
         const { oldPassword, newPassword } = req.body;
 
-        if (!oldPassword || !newPassword) {
+        if (!oldPassword || !newPassword)
             return res.status(400).json({ message: "Both old and new password are required" });
-        }
 
-        if(oldPassword === newPassword) return res.status(400).json({message: "new password can't be the same as the old one"});
+        if (oldPassword === newPassword)
+            return res.status(400).json({ message: "New password cannot be the same as old password" });
 
         const [user] = await sql`
-            SELECT password
-            FROM users
-            WHERE id = ${userId}
+            SELECT password FROM users WHERE id = ${userId}
         `;
-
-        if (!user) {
-            return res.status(404).json({ message: "User not found" });
-        }
+        if (!user) return res.status(404).json({ message: "User not found" });
 
         const match = await bcrypt.compare(oldPassword, user.password);
-        if (!match) {
-            return res.status(401).json({ message: "Incorrect old password" });
-        }
+        if (!match) return res.status(401).json({ message: "Incorrect old password" });
 
-        const hashedPassword = await bcrypt.hash(newPassword, 10);
+        const hashed = await bcrypt.hash(newPassword, 10);
 
         await sql`
             UPDATE users
-            SET password = ${hashedPassword}
+            SET password = ${hashed}
             WHERE id = ${userId}
         `;
 
         return res.json({ message: "Password changed successfully" });
-
     } catch (err) {
-        console.error("updateCurrentUserPassword error:", err);
         return res.status(500).json({ message: "Internal server error" });
     }
 };
@@ -271,14 +225,12 @@ const getManagers = async (req, res) => {
         const rows = await sql`
             SELECT id, name, surname
             FROM users
-            WHERE role IN ('manager', 'admin', 'superadmin')
+            WHERE role_id IN (2, 3, 4)
             ORDER BY surname ASC
         `;
 
         return res.json({ result: rows });
-
     } catch (err) {
-        console.error("getManagers error:", err);
         return res.status(500).json({ message: "Failed to load managers list" });
     }
 };
@@ -290,11 +242,8 @@ const getBranches = async (req, res) => {
             FROM departments
             ORDER BY name ASC
         `;
-
         return res.json({ result: rows });
-
     } catch (err) {
-        console.error("getBranches error:", err);
         return res.status(500).json({ message: "Failed to load branches list" });
     }
 };
@@ -306,16 +255,11 @@ const getLocations = async (req, res) => {
             FROM location
             ORDER BY name ASC
         `;
-
         return res.json({ result: rows });
-
     } catch (err) {
-        console.error("getLocations error:", err);
         return res.status(500).json({ message: "Failed to load locations list" });
     }
 };
-
-
 
 module.exports = {
     getUserDetails,
