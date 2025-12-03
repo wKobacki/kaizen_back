@@ -243,6 +243,15 @@ const createCommission = async (req, res) => {
         const { members } = req.body;
         const userId = req.user.id;
 
+        const existing = await sql`
+            SELECT id FROM commissions WHERE idea_id = ${ideaId}
+        `;
+
+        if (existing.length > 0) {
+            return res.status(400).json({ message: "Commission already exists for this idea" });
+        }
+
+
         const commission = await sql`
             INSERT INTO commissions (idea_id, created_by)
             VALUES (${ideaId}, ${userId})
@@ -360,6 +369,169 @@ const getIdeaDepartmentsShort = async (req, res) => {
     }
 };
 
+const saveCommissionGoals = async (req, res) => {
+    try {
+        const ideaId = req.params.id;
+        const { goals } = req.body;
+
+        if (!Array.isArray(goals) || goals.length === 0) {
+            return res.status(400).json({ message: "Goals are required" });
+        }
+
+        const commission = await sql`
+            SELECT id FROM commissions 
+            WHERE idea_id = ${ideaId}
+            LIMIT 1
+        `;
+
+        if (commission.length === 0) {
+            return res.status(400).json({ message: "No commission found for this idea" });
+        }
+
+        const commissionId = commission[0].id;
+
+        const stepsText = goals.map(g => `${g.title}: ${g.description}`).join("\n");
+
+        const deadlines = goals.map(g => g.deadline).filter(Boolean);
+        const maxDeadline = deadlines.length > 0 ? deadlines.sort().reverse()[0] : null;
+
+        const estimatedCost = 0;
+
+        const createdBy = req.user?.id || 1;
+
+        await sql`
+            INSERT INTO commission_goals 
+                (idea_id, commission_id, goals, steps, estimated_cost, due_date, created_by)
+            VALUES
+                (${ideaId}, ${commissionId}, ${JSON.stringify(goals)}, ${stepsText}, ${estimatedCost}, ${maxDeadline}, ${createdBy})
+            ON CONFLICT (commission_id)
+            DO UPDATE SET 
+                goals = ${JSON.stringify(goals)},
+                steps = ${stepsText},
+                estimated_cost = ${estimatedCost},
+                due_date = ${maxDeadline};
+        `;
+
+        return res.json({ message: "Goals saved" });
+
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({ message: "Internal server error" });
+    }
+};
+
+const checkCommissionExists = async (req, res) => {
+    try {
+        const ideaId = req.params.id;
+
+        const rows = await sql`
+            SELECT id 
+            FROM commissions 
+            WHERE idea_id = ${ideaId}
+            LIMIT 1
+        `;
+
+        if (rows.length === 0) {
+            return res.json({
+                exists: false,
+                members: []
+            });
+        }
+
+        const commissionId = rows[0].id;
+
+        const members = await sql`
+            SELECT user_id 
+            FROM commission_members
+            WHERE commission_id = ${commissionId}
+        `;
+
+        return res.json({
+            exists: true,
+            commissionId,
+            members 
+        });
+
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({ message: "Internal server error" });
+    }
+};
+
+const getCommissionGoals = async (req, res) => {
+    try {
+        const ideaId = req.params.id;
+
+        const commission = await sql`
+            SELECT id FROM commissions 
+            WHERE idea_id = ${ideaId}
+            LIMIT 1
+        `;
+
+        if (commission.length === 0) {
+            return res.json({ goals: [] });
+        }
+
+        const goals = await sql`
+            SELECT goals 
+            FROM commission_goals
+            WHERE commission_id = ${commission[0].id}
+            LIMIT 1
+        `;
+
+        return res.json({
+            goals: goals.length > 0 ? goals[0].goals : []
+        });
+
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({ message: "Internal server error" });
+    }
+};
+
+const updateCommissionGoalStatus = async (req, res) => {
+    try {
+        const ideaId = req.params.id;
+        const { goalIndex, status } = req.body;
+
+        const commission = await sql`
+            SELECT id FROM commissions 
+            WHERE idea_id = ${ideaId}
+            LIMIT 1
+        `;
+
+        if (commission.length === 0) {
+            return res.status(400).json({ message: "No commission found" });
+        }
+
+        const commissionId = commission[0].id;
+
+        const existing = await sql`
+            SELECT goals FROM commission_goals 
+            WHERE commission_id = ${commissionId}
+        `;
+
+        if (existing.length === 0) {
+            return res.status(400).json({ message: "No goals stored" });
+        }
+
+        const goals = existing[0].goals;
+
+        goals[goalIndex].status = status;
+
+        await sql`
+            UPDATE commission_goals
+            SET goals = ${JSON.stringify(goals)}
+            WHERE commission_id = ${commissionId}
+        `;
+
+        res.json({ message: "Goal updated" });
+
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+};
 
 
 module.exports = {
@@ -373,5 +545,9 @@ module.exports = {
     createCommission,
     completeIdea,
     getIdeaWorkflow,
-    getIdeaDepartmentsShort
+    getIdeaDepartmentsShort,
+    saveCommissionGoals,
+    checkCommissionExists, 
+    getCommissionGoals,
+    updateCommissionGoalStatus
 };
