@@ -27,4 +27,6 @@ router.get('/:id/departments', controller.getIdeaDepartmentsShort);
 router.get('/:id/commission/goals', controller.getCommissionGoals);
 router.patch('/:id/commission/goals', controller.updateCommissionGoalStatus);
 
+router.put('/:id/commission', controller.updateCommissionMembers);
+
 module.exports = router;

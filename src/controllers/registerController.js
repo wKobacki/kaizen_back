@@ -34,7 +34,7 @@ const handleNewUser = async (req, res) => {
 
         const verificationCode = generateVerificationCode();
 
-        console.log(verificationCode);// 
+        console.log(verificationCode);
 
         const result = await sql`
             INSERT INTO users (email, password, role, name, surname, location, isVerified, isBlocked, verificationCode)

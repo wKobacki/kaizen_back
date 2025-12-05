@@ -163,27 +163,35 @@ const updateProfileInfo = async (req, res) => {
         `;
         if (!existing) return res.status(404).json({ message: "User not found" });
 
-        if (supervisor) {
+        if (supervisor !== undefined && supervisor !== null) {
             const [sup] = await sql`SELECT id FROM users WHERE id = ${supervisor}`;
             if (!sup) return res.status(400).json({ message: "Supervisor does not exist" });
             if (Number(supervisor) === Number(userId))
                 return res.status(400).json({ message: "User cannot be their own supervisor" });
         }
 
+        const fieldsToUpdate = {};
+        if (name !== undefined) fieldsToUpdate.name = name;
+        if (surname !== undefined) fieldsToUpdate.surname = surname;
+        if (email !== undefined) fieldsToUpdate.email = email;
+        if (department_id !== undefined) fieldsToUpdate.department_id = department_id;
+        if (location_id !== undefined) fieldsToUpdate.location_id = location_id;
+        if (supervisor !== undefined) fieldsToUpdate.supervisor = supervisor;
+
         await sql`
-            UPDATE users SET
-                name = ${name},
-                surname = ${surname},
-                email = ${email},
-                department_id = ${department_id},
-                location_id = ${location_id},
-                supervisor = ${supervisor}
-            WHERE id = ${userId}
+            UPDATE users SET ${sql(fieldsToUpdate)} WHERE id = ${userId}
         `;
 
         return res.json({ message: "Profile updated successfully" });
+
     } catch (error) {
-        return res.status(500).json({ message: "Internal server error" });
+        console.error(error);
+
+        if (error.code === '23505') {
+            return res.status(400).json({ message: "Email already exists" });
+        }
+
+        return res.status(500).json({ message: "Internal server error", error });
     }
 };
 
