@@ -3,60 +3,75 @@ const sql = require('./db.js');
 
 
 const createIdea = async (req, res) => {
-    try {
-        const { title, description, solution, images = [], userId, department } = req.body;
-        
-        if (!title || !description || !solution || !userId)
-            return res.status(400).json({ message: 'Missing required fields' });
+  try {
+    const { title, description, solution, images = [] } = req.body;
 
-        const submittedStatus = await sql`
-            SELECT id FROM status WHERE name = 'submitted'
-        `;
-
-        const inserted = await sql`
-            INSERT INTO ideas (title, description, solution, images, user_id, status_id, current_step, department)
-            VALUES (
-                ${title},
-                ${description},
-                ${solution},
-                ${JSON.stringify(images)},
-                ${userId},
-                ${submittedStatus[0].id},
-                ${submittedStatus[0].id},
-                ${department}
-            )
-            RETURNING id
-        `;
-
-        await sql`
-            INSERT INTO idea_workflow_log (idea_id, step, action, by_user, description)
-            VALUES (${inserted[0].id}, 'submitted', 'created', ${userId}, 'Idea submitted')
-        `;
-
-        return res.status(201).json({
-            message: 'Idea created successfully',
-            id: inserted[0].id
-        });
-
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ message: 'Internal server error' });
+    const userId = req.user?.id;
+    if (!title || !description || !solution || !userId) {
+      return res.status(400).json({ message: "Missing required fields" });
     }
+
+    const [me] = await sql`
+      SELECT department_id
+      FROM users
+      WHERE id = ${userId}
+      LIMIT 1
+    `;
+
+    if (!me?.department_id) {
+      return res.status(400).json({ message: "User has no department assigned" });
+    }
+
+    const [submitted] = await sql`
+      SELECT id FROM status WHERE name = 'submitted' LIMIT 1
+    `;
+
+    const inserted = await sql`
+      INSERT INTO ideas (title, description, solution, images, user_id, status_id, current_step, department_id)
+      VALUES (
+        ${title},
+        ${description},
+        ${solution},
+        ${JSON.stringify(images)},
+        ${userId},
+        ${submitted.id},
+        ${submitted.id},
+        ${me.department_id}
+      )
+      RETURNING id
+    `;
+
+    await sql`
+      INSERT INTO idea_workflow_log (idea_id, step, action, by_user, description)
+      VALUES (${inserted[0].id}, 'submitted', 'created', ${userId}, 'Idea submitted')
+    `;
+
+    return res.status(201).json({ message: "Idea created successfully", id: inserted[0].id });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
 };
 
 const getAllIdeas = async (req, res) => {
-    try {
-        const results = await sql`
-            SELECT id, title, status_id, department
-            FROM ideas
-        `;
+  try {
+    const ideas = await sql`
+      SELECT
+        i.id,
+        i.title,
+        d.name AS department,
+        s.name AS status
+      FROM ideas i
+      LEFT JOIN departments d ON d.id = i.department_id
+      LEFT JOIN status s ON s.id = i.status_id
+      ORDER BY i.created_at DESC
+    `;
 
-        return res.status(200).json({ message: 'Success', ideas: results });
-
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ message: 'Internal server error' });
-    }
+    return res.json({ ideas });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
 };
 
 const getIdeaDetails = async (req, res) => {
@@ -480,7 +495,6 @@ const getCommissionGoals = async (req, res) => {
 
         const commissionId = commission[0].id;
 
-        // Teraz pobieramy również is_done
         const rows = await sql`
             SELECT 
                 id, 
@@ -504,7 +518,7 @@ const getCommissionGoals = async (req, res) => {
             deadline: r.due_date,
             created_by: r.created_by,
             created_at: r.created_at,
-            is_done: r.is_done === true // boolean z DB
+            is_done: r.is_done === true 
         }));
 
         return res.json({ goals });
