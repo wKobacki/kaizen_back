@@ -18,7 +18,7 @@ module.exports = {
 
     BASE_URL: process.env.BASE_URL,
 
-    POST_PICTURE: process.env.POST_PICTURE_DIR || 'uploads/posts/',
+    POST_PICTURE: process.env.POST_PICTURE_DIR,
 
     ACCESS_TOKEN_SECRET: process.env.ACCESS_TOKEN_SECRET,
     REFRESH_TOKEN_SECRET: process.env.REFRESH_TOKEN_SECRET

@@ -120,35 +120,47 @@ const getUsers = async (req, res) => {
 };
 
 const getProfileInfo = async (req, res) => {
-    try {
-        const userId = req.params?.id;
-        if (!userId) return res.status(400).json({ message: "User id is required" });
+  try {
+    const userId = req.params?.id;
+    if (!userId) return res.status(400).json({ message: "User id is required" });
 
-        const profile = await sql`
-            SELECT 
-                u.id,
-                u.name,
-                u.surname,
-                u.email,
-                u.role_id,
-                l.name AS location_name,
-                d.name AS department_name,
-                s.name AS supervisor_name,
-                s.surname AS supervisor_surname
-            FROM users u
-            LEFT JOIN users s ON s.id = u.supervisor
-            LEFT JOIN location l ON l.id = u.location_id
-            LEFT JOIN departments d ON d.id = u.department_id
-            WHERE u.id = ${userId};
-        `;
+    const profile = await sql`
+      SELECT 
+        u.id,
+        u.name,
+        u.surname,
+        u.email,
+        u.role_id,
+        r.name AS role_name,
 
-        if (profile.length === 0)
-            return res.status(404).json({ message: "User not found" });
+        u.supervisor,
+        s.name AS supervisor_name,
+        s.surname AS supervisor_surname,
 
-        return res.json({ message: "Success", result: profile });
-    } catch (error) {
-        return res.status(500).json({ message: "Internal server error" });
+        u.department_id,
+        d.name AS department_name,
+
+        u.location_id,
+        l.name AS location_name
+
+      FROM users u
+      LEFT JOIN roles r ON r.id = u.role_id
+      LEFT JOIN users s ON s.id = u.supervisor
+      LEFT JOIN departments d ON d.id = u.department_id
+      LEFT JOIN location l ON l.id = u.location_id
+      WHERE u.id = ${userId}
+      LIMIT 1;
+    `;
+
+    if (profile.length === 0) {
+      return res.status(404).json({ message: "User not found" });
     }
+
+    return res.json({ message: "Success", result: [profile[0]] });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
 };
 
 const updateProfileInfo = async (req, res) => {
@@ -267,6 +279,98 @@ const getLocations = async (req, res) => {
     } catch (err) {
         return res.status(500).json({ message: "Failed to load locations list" });
     }
+};
+
+const editCommissionMembers = async (req, res) => {
+  try {
+    const { commission_id, idea_id, memberIds } = req.body;
+
+    const commissionId = Number(commission_id);
+    const ideaId = idea_id !== undefined ? Number(idea_id) : null;
+
+    if (!Number.isInteger(commissionId)) {
+      return res.status(400).json({ message: "commission_id is required and must be an integer" });
+    }
+
+    if (!Array.isArray(memberIds)) {
+      return res.status(400).json({ message: "memberIds must be an array of user ids" });
+    }
+
+    const nextMemberIds = [...new Set(memberIds.map(Number))].filter(Number.isInteger);
+
+    const result = await sql.begin(async (tx) => {
+      if (ideaId !== null && Number.isInteger(ideaId)) {
+        const check = await tx`
+          SELECT id
+          FROM commissions
+          WHERE id = ${commissionId} AND idea_id = ${ideaId}
+        `;
+        if (check.length === 0) {
+          throw Object.assign(new Error("Commission not found for given idea_id"), { status: 404 });
+        }
+      }
+
+      const assignedUsers = await tx`
+        SELECT user_id
+        FROM commision_members
+        WHERE commission_id = ${commissionId}
+      `;
+
+      const currentIds = assignedUsers.map(r => Number(r.user_id));
+      const currentSet = new Set(currentIds);
+      const nextSet = new Set(nextMemberIds);
+
+      const toAdd = nextMemberIds.filter(id => !currentSet.has(id));
+      const toRemove = currentIds.filter(id => !nextSet.has(id));
+
+      if (toRemove.length > 0) {
+        await tx`
+          DELETE FROM commision_members
+          WHERE commission_id = ${commissionId}
+            AND user_id IN ${tx(toRemove)}
+        `;
+      }
+
+      if (toAdd.length > 0) {
+        const rowsToInsert = toAdd.map(uid => ({
+          commission_id: commissionId,
+          user_id: uid,
+        }));
+
+        await tx`
+          INSERT INTO commision_members ${tx(rowsToInsert, "commission_id", "user_id")}
+          ON CONFLICT DO NOTHING
+        `;
+      }
+
+      const updated = await tx`
+        SELECT user_id
+        FROM commision_members
+        WHERE commission_id = ${commissionId}
+        ORDER BY user_id
+      `;
+
+      return {
+        added: toAdd,
+        removed: toRemove,
+        members: updated.map(r => Number(r.user_id)),
+      };
+    });
+
+    return res.status(200).json({
+      message: "Commission members updated",
+      ...result,
+    });
+
+  } catch (err) {
+    console.error(err);
+
+    if (err?.status) {
+      return res.status(err.status).json({ message: err.message });
+    }
+
+    return res.status(500).json({ message: "Internal server error" });
+  }
 };
 
 module.exports = {
