@@ -8,8 +8,8 @@ const handleNewUser = require('../controllers/registerController');
 router.post('/', handleNewUser);
 
 router.get('/managers', verifyJWT, userController.getManagers);
-router.get('/branches', verifyJWT, userController.getBranches);
-router.get('/locations', verifyJWT, userController.getLocations);
+router.get('/branches', userController.getBranches);
+router.get('/locations', userController.getLocations);
 
 router.use(verifyJWT);
 

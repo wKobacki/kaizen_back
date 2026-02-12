@@ -1,57 +1,91 @@
-const experss = require('express');
-const sql = require('./db');
-const bcrypt = require('bcrypt');
+const sql = require("./db");
+const bcrypt = require("bcrypt");
 
 const generateVerificationCode = () => {
-    return Math.floor(100000 + Math.random() * 900000).toString();
+  return Math.floor(100000 + Math.random() * 900000).toString();
 };
 
 const handleNewUser = async (req, res) => {
-    try {
-        const { email, password, name, surname, location } = req.body;
+  try {
+    const { email, password, name, surname, location_id, department_id } = req.body;
 
-        if (!email || !password || !name || !surname || !location) {
-            return res.status(400).json({ message: 'All fields are required' });
-        }
-
-        if (password.length < 8 || password.length > 48) return res.status(400).json({ message: 'Password must be between 8 and 48 characters' });
-
-        if (email.length > 255) return res.status(400).json({message: "too logn email address"});
-
-        if (name.length > 200) return res.status(400).json({message: "too long name"});
-
-        if (surname.length > 200) return res.status(400).json({message: "too long surname"});
-
-        if (location!=='Warszawa' || location!=='Skierniewice' || location!=='Lyszkowice' || location!=='Rakoniewice' || location!=='Gliwice' || location!=='Teresin' || location!=='Nowy Tomysl') return res.status(400).json({message: "invalid location"});
-
-        const existingUser = await sql`
-            SELECT id from users
-            WHERE email = ${email}
-        `
-        if (existingUser.length > 0) return res.status(409).json({ message: 'User with this email already exists' });
-
-        const hashedPassword = await bcrypt.hash(password, 14);
-
-        const verificationCode = generateVerificationCode();
-
-        console.log(verificationCode);
-
-        const result = await sql`
-            INSERT INTO users (email, password, role, name, surname, location, isVerified, isBlocked, verificationCode)
-            VALUES (${email}, ${hashedPassword}, 'User', ${name}, ${surname}, ${location}, false, false, ${verificationCode})
-            RETURNING id
-        `;
-
-        const userId = result[0].id;
-
-        //await sendVerificationEmail(email, name, surname, verificationCode); // Placeholder for email sending function
-        console.log('Verification email sent to: ' + email);
-
-        return res.status(201).json({ message: 'User registered successfully. Please check your email for the verification code.', userId });
-    } catch (err) {
-        console.error(err);
-        return res.status(500).json({message: "Internal Server Error" });
+    if (!email || !password || !name || !surname || !location_id || !department_id) {
+      return res.status(400).json({ message: "All fields are required" });
     }
+
+    if (password.length < 8 || password.length > 48) {
+      return res.status(400).json({ message: "Password must be between 8 and 48 characters" });
+    }
+
+    if (email.length > 255) return res.status(400).json({ message: "too long email address" });
+    if (name.length > 200) return res.status(400).json({ message: "too long name" });
+    if (surname.length > 200) return res.status(400).json({ message: "too long surname" });
+
+    const locId = Number(location_id);
+    const depId = Number(department_id);
+
+    if (!Number.isInteger(locId) || locId <= 0) {
+      return res.status(400).json({ message: "invalid location_id" });
+    }
+    if (!Number.isInteger(depId) || depId <= 0) {
+      return res.status(400).json({ message: "invalid department_id" });
+    }
+
+    const loc = await sql`SELECT id FROM location WHERE id = ${locId} LIMIT 1`;
+    if (loc.length === 0) return res.status(400).json({ message: "invalid location" });
+
+    const dep = await sql`
+      SELECT id, supervisor_user_id
+      FROM departments
+      WHERE id = ${depId}
+      LIMIT 1
+    `;
+    if (dep.length === 0) return res.status(400).json({ message: "invalid department" });
+
+    const supervisorId = Number(dep[0].supervisor_user_id);
+    if (!Number.isInteger(supervisorId) || supervisorId <= 0) {
+      return res.status(400).json({ message: "department has no supervisor assigned" });
+    }
+
+    const mgr = await sql`SELECT id FROM users WHERE id = ${supervisorId} LIMIT 1`;
+    if (mgr.length === 0) {
+      return res.status(400).json({ message: "invalid department supervisor" });
+    }
+
+    const existingUser = await sql`SELECT id FROM users WHERE email = ${email}`;
+    if (existingUser.length > 0) {
+      return res.status(409).json({ message: "User with this email already exists" });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 14);
+    const verificationCode = generateVerificationCode();
+
+    const result = await sql`
+      INSERT INTO users (
+        email, password, role_id, name, surname,
+        location_id, department_id,
+        supervisor,
+        is_verified, "verification_code"
+      )
+      VALUES (
+        ${email}, ${hashedPassword}, 2, ${name}, ${surname},
+        ${locId}, ${depId},
+        ${supervisorId},
+        false, ${verificationCode}
+      )
+      RETURNING id
+    `;
+
+    const userId = result?.[0]?.id;
+
+    return res.status(201).json({
+      message: "User registered successfully. Please check your email for the verification code.",
+      userId,
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Internal Server Error" });
+  }
 };
 
 module.exports = handleNewUser;

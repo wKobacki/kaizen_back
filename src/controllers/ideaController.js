@@ -1121,17 +1121,14 @@ const getCommissionSpecificMembers = async (req, res) => {
     const userId = Number(req.params.userId);
     const commisionId = Number(req.params.commisionId);
 
-    // If the value exists
     if (!userId || !commisionId) {
       return res.status(400).json({ message: "Missing required fields" });
     }
 
-    // If the value is numeric
     if (!Number.isInteger(userId) || !Number.isInteger(commisionId)) {
       return res.status(400).json({ message: "Invalid field types" });
     }
 
-    // Rows that contain users whos supervisor is the sender of the request or they are head of some department
     const supervisorRows = await sql`
       SELECT id, name, surname
       FROM users
