@@ -16,6 +16,7 @@ const ideasRouter = require("./src/routes/ideaRoute");
 const ideasAdminRouter = require("./src/routes/ideaAdminRoute");
 const eventLogRoute = require("./src/routes/eventLogRoute");
 const auditLogger = require("./src/middleware/auditLogger");
+const departmentsRoute = require("./src/routes/departmentsRoute");
 
 const app = express();
 
@@ -50,6 +51,7 @@ app.use(`${API_ROUTE}/password-reset`, resetRouter);
 app.use(`${API_ROUTE}/ideas`, ideasRouter);
 app.use(`${API_ROUTE}/ideasManagment`, ideasAdminRouter);
 app.use(`${API_ROUTE}/event-log`, eventLogRoute);
+app.use(`${API_ROUTE}/departments`, departmentsRoute);
 
 // GLOBAL ERROR HANDLER
 app.use((err, req, res, next) => {
