@@ -4,6 +4,7 @@ const cookieParser = require("cookie-parser");
 const path = require("path");
 
 const corsOptions = require("./src/config/corsOptions");
+const { APP_PORT, API_ROUTE } = require("./config");
 
 const loginRouter = require("./src/routes/loginRoute");
 const refreshRouter = require("./src/routes/refreshRoute");
@@ -13,8 +14,8 @@ const restoreRouter = require("./src/routes/passwordRestore");
 const resetRouter = require("./src/routes/passwordReset");
 const ideasRouter = require("./src/routes/ideaRoute");
 const ideasAdminRouter = require("./src/routes/ideaAdminRoute");
-
-const { APP_PORT, API_ROUTE } = require("./config");
+const eventLogRoute = require("./src/routes/eventLogRoute");
+const auditLogger = require("./src/middleware/auditLogger");
 
 const app = express();
 
@@ -25,11 +26,19 @@ app.use(cookieParser());
 
 app.use("/upload", express.static(path.join(__dirname, "upload")));
 
-// logowanie requestów
+// request log (console)
 app.use((req, res, next) => {
   console.log(`Incoming req: ${req.method} ${req.originalUrl}`);
   next();
 });
+
+app.use(
+  auditLogger({
+    enabled: true,
+    onlyPaths: [`${API_ROUTE}/admin`, `${API_ROUTE}/ideas`, `${API_ROUTE}/users`, `${API_ROUTE}/event-log`],
+    ignorePaths: [`${API_ROUTE}/refresh`],
+  })
+);
 
 // ROUTES
 app.use(`${API_ROUTE}/login`, loginRouter);
@@ -40,6 +49,7 @@ app.use(`${API_ROUTE}/password-restore`, restoreRouter);
 app.use(`${API_ROUTE}/password-reset`, resetRouter);
 app.use(`${API_ROUTE}/ideas`, ideasRouter);
 app.use(`${API_ROUTE}/ideasManagment`, ideasAdminRouter);
+app.use(`${API_ROUTE}/event-log`, eventLogRoute);
 
 // GLOBAL ERROR HANDLER
 app.use((err, req, res, next) => {
