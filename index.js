@@ -41,7 +41,7 @@ app.use(
   })
 );
 
-// ROUTES
+// Routes
 app.use(`${API_ROUTE}/login`, loginRouter);
 app.use(`${API_ROUTE}/refresh`, refreshRouter);
 app.use(`${API_ROUTE}/logout`, logoutRouter);
@@ -53,7 +53,7 @@ app.use(`${API_ROUTE}/ideasManagment`, ideasAdminRouter);
 app.use(`${API_ROUTE}/event-log`, eventLogRoute);
 app.use(`${API_ROUTE}/departments`, departmentsRoute);
 
-// GLOBAL ERROR HANDLER
+// global error handler
 app.use((err, req, res, next) => {
   console.error("GLOBAL ERROR:", err);
   res.status(500).json({ message: "Internal server error" });
