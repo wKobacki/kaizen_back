@@ -3,10 +3,14 @@ const router = express.Router();
 
 const controller = require("../controllers/ideaController");
 const verifyJWT = require("../middleware/verifyJWT");
+const requireVerified = require("../middleware/requireVerified");
 const uploadIdeas = require("../middleware/uploadIdeas");
 const { requireCommissionAccess } = require("../middleware/requireCommissionAccess");
 
+const { resolveUsersByIds } = require("../controllers/ideaController");
+
 router.use(verifyJWT);
+router.use(requireVerified);
 
 router.get("/", controller.getAllIdeas);
 router.post("/", uploadIdeas.array("images", 3), controller.createIdea);
@@ -27,6 +31,12 @@ router.get(
   "/:id/commission/members",
   requireCommissionAccess({ allowOwner: true, mode: "read" }),
   controller.getCommissionMembers
+);
+
+router.post(
+  "/:id/commission/members/resolve",
+  requireCommissionAccess({ allowOwner: true, mode: "read" }),
+  resolveUsersByIds
 );
 
 router.get(

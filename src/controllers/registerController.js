@@ -1,5 +1,6 @@
 const sql = require("./db");
 const bcrypt = require("bcrypt");
+const { sendVerificationEmail } = require("./mailerController");
 
 const generateVerificationCode = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -60,27 +61,36 @@ const handleNewUser = async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 14);
     const verificationCode = generateVerificationCode();
 
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
     const result = await sql`
       INSERT INTO users (
         email, password, role_id, name, surname,
         location_id, department_id,
         supervisor,
-        is_verified, "verification_code"
+        is_verified,
+        verification_code,
+        verification_code_expires_at
       )
       VALUES (
         ${email}, ${hashedPassword}, 2, ${name}, ${surname},
         ${locId}, ${depId},
         ${supervisorId},
-        false, ${verificationCode}
+        false,
+        ${verificationCode},
+        ${expiresAt}
       )
       RETURNING id
     `;
 
     const userId = result?.[0]?.id;
 
+    await sendVerificationEmail(email, name, surname, verificationCode);
+
     return res.status(201).json({
       message: "User registered successfully. Please check your email for the verification code.",
       userId,
+      is_verified: false,
     });
   } catch (err) {
     console.error(err);

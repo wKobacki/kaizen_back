@@ -10,6 +10,8 @@ const uniqInt = (arr) => {
   return [...s];
 };
 
+const norm = (v) => String(v ?? "").trim().toLowerCase();
+
 const getStatusId = async (trx, name) => {
   const [row] = await trx`SELECT id FROM status WHERE name = ${name} LIMIT 1`;
   if (!row) throw new Error(`Missing status in DB: ${name}`);
@@ -226,15 +228,19 @@ const getIdeaDetails = async (req, res) => {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
-    const roleId = Number(req.user?.role_id ?? req.user?.roleId ?? req.user?.userRoleId);
-    const isAdmin = roleId === 1;
+    const roleName = norm(req.user?.role_name);
+    const isAdmin = roleName === "admin";
+    const isSupervisorRole = roleName === "supervisor";
 
     const ideaRows = await sql`
       SELECT
         i.*,
         d.name AS department_name,
-        s.name AS status_name,
-        cs.name AS current_step_name,
+
+        s.name  AS status_code,
+        s.name  AS status_name,        -- jak chcesz "ładną nazwę", to dodaj osobną kolumnę w DB
+        cs.name AS current_step_code,
+        cs.name AS current_step_name,  -- jw.
 
         au.supervisor AS submitter_supervisor_id,
         sup.name AS submitter_supervisor_name,
@@ -259,8 +265,7 @@ const getIdeaDetails = async (req, res) => {
     const idea = ideaRows[0];
 
     const ownerId = Number(idea.user_id);
-    const isOwner =
-      Number.isInteger(ownerId) && Number.isInteger(userId) && ownerId === userId;
+    const isOwner = Number.isInteger(ownerId) && ownerId === userId;
 
     const cm = await sql`
       SELECT 1
@@ -292,7 +297,8 @@ const getIdeaDetails = async (req, res) => {
         SELECT
           idp.*,
           dept.name AS department_name,
-          s.name AS status_name
+          s.name    AS status_code,
+          s.name    AS status_name
         FROM idea_departments idp
         LEFT JOIN departments dept ON dept.id = idp.department_id
         LEFT JOIN status s ON s.id = idp.status_id
@@ -304,7 +310,8 @@ const getIdeaDetails = async (req, res) => {
         SELECT
           idp.*,
           dept.name AS department_name,
-          s.name AS status_name
+          s.name    AS status_code,
+          s.name    AS status_name
         FROM idea_departments idp
         JOIN departments dept ON dept.id = idp.department_id
         LEFT JOIN status s ON s.id = idp.status_id
@@ -320,7 +327,9 @@ const getIdeaDetails = async (req, res) => {
       log,
       departments,
       access: {
+        role_name: roleName,
         isAdmin,
+        isSupervisorRole,
         isOwner,
         isCommissionMember,
         isIdeaSupervisor,
@@ -1142,6 +1151,32 @@ const getCommissionSpecificMembers = async (req, res) => {
   }
 };
 
+const resolveUsersByIds = async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+
+    const userIds = [...new Set(ids)]
+      .map((x) => Number(x))
+      .filter((x) => Number.isInteger(x) && x > 0);
+
+    if (userIds.length === 0) {
+      return res.status(400).json({ message: "ids[] is required" });
+    }
+
+    const rows = await sql`
+      SELECT id, name, surname
+      FROM users
+      WHERE id = ANY(${sql.array(userIds)}::int4[])
+      ORDER BY surname, name
+    `;
+
+    return res.status(200).json({ message: "Success", users: rows });
+  } catch (e) {
+    console.error("resolveUsersByIds ERROR:", e);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
 module.exports = {
     createIdea,
     getAllIdeas,
@@ -1163,5 +1198,6 @@ module.exports = {
     getIdeaResponsibles,
     saveIdeaResponsibles,
     getCommissionPeople,
-    getCommissionSpecificMembers
+    getCommissionSpecificMembers, 
+    resolveUsersByIds
 };

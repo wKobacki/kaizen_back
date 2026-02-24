@@ -17,6 +17,9 @@ const ideasAdminRouter = require("./src/routes/ideaAdminRoute");
 const eventLogRoute = require("./src/routes/eventLogRoute");
 const auditLogger = require("./src/middleware/auditLogger");
 const departmentsRoute = require("./src/routes/departmentsRoute");
+const constantsRoute = require("./src/routes/constantsRoute");
+const registerRouter = require("./src/routes/registerRoute"); 
+const authRouter = require("./src/routes/authRoutes"); 
 
 const app = express();
 
@@ -36,22 +39,32 @@ app.use((req, res, next) => {
 app.use(
   auditLogger({
     enabled: true,
-    onlyPaths: [`${API_ROUTE}/admin`, `${API_ROUTE}/ideas`, `${API_ROUTE}/users`, `${API_ROUTE}/event-log`],
+    onlyPaths: [
+      `${API_ROUTE}/admin`,
+      `${API_ROUTE}/ideas`,
+      `${API_ROUTE}/users`,
+      `${API_ROUTE}/event-log`,
+    ],
     ignorePaths: [`${API_ROUTE}/refresh`],
   })
 );
 
 // Routes
 app.use(`${API_ROUTE}/login`, loginRouter);
+
+app.use(`${API_ROUTE}/register`, registerRouter);
+app.use(`${API_ROUTE}/auth`, authRouter);
 app.use(`${API_ROUTE}/refresh`, refreshRouter);
 app.use(`${API_ROUTE}/logout`, logoutRouter);
 app.use(`${API_ROUTE}/users`, userRouter);
 app.use(`${API_ROUTE}/password-restore`, restoreRouter);
 app.use(`${API_ROUTE}/password-reset`, resetRouter);
 app.use(`${API_ROUTE}/ideas`, ideasRouter);
+
 app.use(`${API_ROUTE}/ideasManagment`, ideasAdminRouter);
 app.use(`${API_ROUTE}/event-log`, eventLogRoute);
 app.use(`${API_ROUTE}/departments`, departmentsRoute);
+app.use(`${API_ROUTE}/constants`, constantsRoute);
 
 // global error handler
 app.use((err, req, res, next) => {
