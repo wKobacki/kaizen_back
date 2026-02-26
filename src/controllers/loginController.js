@@ -5,7 +5,7 @@ const { ACCESS_TOKEN_SECRET, REFRESH_TOKEN_SECRET } = require("../../config");
 
 const handleLogin = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password } = req.body || {};
 
     if (!email || !password) {
       return res.status(400).json({ message: "Email and password are required" });
@@ -20,7 +20,7 @@ const handleLogin = async (req, res) => {
         department_id,
         is_verified
       FROM users
-      WHERE email = ${email}
+      WHERE email = ${String(email).trim()}
       LIMIT 1
     `;
 
@@ -29,43 +29,39 @@ const handleLogin = async (req, res) => {
     }
 
     const user = foundUser[0];
-    const match = await bcrypt.compare(password, user.password);
 
+    const match = await bcrypt.compare(password, user.password);
     if (!match) {
       return res.status(401).json({ message: "Invalid email or password" });
     }
 
-    const accessToken = jwt.sign(
-      {
-        id: user.id,
-        email: user.email,
-        role_id: user.role_id,
-        department_id: user.department_id,
-      },
-      ACCESS_TOKEN_SECRET,
-      { expiresIn: "15m" }
-    );
+    const tokenPayload = {
+      id: user.id,
+      email: user.email,
+      role_id: user.role_id,
+      department_id: user.department_id,
+    };
 
-    const refreshToken = jwt.sign(
-      {
-        id: user.id,
-        email: user.email,
-        role_id: user.role_id,
-        department_id: user.department_id,
-      },
-      REFRESH_TOKEN_SECRET,
-      { expiresIn: "1d" }
-    );
+    const accessToken = jwt.sign(tokenPayload, ACCESS_TOKEN_SECRET, {
+      expiresIn: "15m",
+    });
+
+    const refreshToken = jwt.sign(tokenPayload, REFRESH_TOKEN_SECRET, {
+      expiresIn: "1d",
+    });
 
     await sql`
       UPDATE users
-      SET refresh_token = ${refreshToken}
+      SET 
+        refresh_token = ${refreshToken},
+        last_login = NOW()
       WHERE id = ${user.id}
     `;
 
     res.cookie("jwt", refreshToken, {
       httpOnly: true,
-      secure: false,
+      secure: false, 
+      sameSite: "lax",
       maxAge: 24 * 60 * 60 * 1000,
     });
 
@@ -77,7 +73,14 @@ const handleLogin = async (req, res) => {
       accessToken,
     });
   } catch (error) {
-    console.error(error);
+    console.error("handleLogin ERROR:", error);
+
+    if (error.code === "42703") {
+      return res.status(500).json({
+        message: "Missing database column (e.g. last_login). Run migration first.",
+      });
+    }
+
     return res.status(500).json({ message: "Internal server error" });
   }
 };

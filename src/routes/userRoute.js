@@ -18,6 +18,10 @@ router.use(requireVerified);
 
 router.get("/admin", verifyAdmin, userController.getUsers);
 router.get("/admin/:id", verifyAdmin, userController.getUserDetails);
+
+router.put("/admin/:id", verifyAdmin, userController.updateUserAdmin);
+router.post("/admin/:id/force-logout", verifyJWT, verifyAdmin, userController.forceLogoutUserAdmin);
+
 router.put("/admin/:id/role", verifyAdmin, userController.updateUserRole);
 router.put("/admin/:id/location", verifyAdmin, userController.updateUserBranch);
 router.delete("/admin/:id", verifyAdmin, userController.deleteUser);

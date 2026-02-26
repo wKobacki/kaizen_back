@@ -48,7 +48,6 @@ const sendMailViaGraph = async ({ to, subject, text }) => {
     saveToSentItems: true,
   };
 
-  // wysyłka jako konkretny mailbox (SENDER_EMAIL)
   await axios.post(
     `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(SENDER_EMAIL)}/sendMail`,
     payload,
@@ -72,7 +71,6 @@ const sendVerificationEmail = async (email, name, surname, verificationCode) => 
     });
     console.log("Verification email sent (Graph)");
   } catch (err) {
-    // pokaż sensowną diagnostykę
     const status = err?.response?.status;
     const data = err?.response?.data;
     console.error("Graph sendMail ERROR:", status, data || err.message);
@@ -97,4 +95,4 @@ const sendPasswordResetEmail = async (email, name, surname, verificationCode) =>
   }
 };
 
-module.exports = { sendVerificationEmail, sendPasswordResetEmail };
+module.exports = { sendVerificationEmail, sendPasswordResetEmail, sendMailViaGraph };

@@ -5,7 +5,8 @@ const bcrypt = require('bcrypt');
 const getUserDetails = async (req, res) => {
   try {
     const userId = Number(req.params?.id);
-    if (!Number.isInteger(userId)) {
+
+    if (!Number.isInteger(userId) || userId <= 0) {
       return res.status(400).json({ message: "User ID is required" });
     }
 
@@ -24,8 +25,11 @@ const getUserDetails = async (req, res) => {
         u.supervisor,
         s.name AS supervisor_name,
         s.surname AS supervisor_surname,
+        s.email AS supervisor_email,
         u.is_verified,
-        u.verification_code
+        u.verification_code,
+        u.created_at,
+        u.last_login
       FROM users u
       LEFT JOIN users s ON s.id = u.supervisor
       LEFT JOIN location l ON l.id = u.location_id
@@ -36,11 +40,20 @@ const getUserDetails = async (req, res) => {
     `;
 
     const user = rows?.[0];
-    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
 
     return res.json(user);
   } catch (error) {
     console.error("getUserDetails ERROR:", error);
+
+    if (error.code === "42703") {
+      return res.status(500).json({
+        message: "Missing database column in users table.",
+      });
+    }
+
     return res.status(500).json({ message: "Internal server error" });
   }
 };
@@ -311,6 +324,120 @@ const getLocations = async (req, res) => {
     }
 };
 
+const updateUserAdmin = async (req, res) => {
+  try {
+    const userId = Number(req.params.id);
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return res.status(400).json({ message: "Invalid user id" });
+    }
+
+    const {
+      email,
+      name,
+      surname,
+      role_id,
+      department_id,
+      location_id,
+      supervisor,
+      is_verified,
+    } = req.body || {};
+
+    if (!email || String(email).trim().length < 3) {
+      return res.status(400).json({ message: "Email is required" });
+    }
+
+    const toNullableInt = (v) => {
+      if (v === "" || v === undefined || v === null) return null;
+      const n = Number(v);
+      return Number.isInteger(n) ? n : NaN;
+    };
+
+    const nRole = toNullableInt(role_id);
+    const nDept = toNullableInt(department_id);
+    const nLoc = toNullableInt(location_id);
+    const nSup = toNullableInt(supervisor);
+
+    for (const [k, v] of [
+      ["role_id", nRole],
+      ["department_id", nDept],
+      ["location_id", nLoc],
+      ["supervisor", nSup],
+    ]) {
+      if (v === null) continue;
+      if (!Number.isInteger(v) || v <= 0) {
+        return res.status(400).json({ message: `Invalid ${k}` });
+      }
+    }
+
+    if (nSup !== null && nSup === userId) {
+      return res.status(400).json({ message: "User cannot be their own supervisor" });
+    }
+
+    const [updated] = await sql`
+      UPDATE users
+      SET
+        email = ${String(email).trim()},
+        name = ${String(name || "").trim()},
+        surname = ${String(surname || "").trim()},
+        role_id = ${nRole},
+        department_id = ${nDept},
+        location_id = ${nLoc},
+        supervisor = ${nSup},
+        is_verified = ${Boolean(is_verified)}
+      WHERE id = ${userId}
+      RETURNING id, email, name, surname, role_id, department_id, location_id, supervisor, is_verified
+    `;
+
+    if (!updated) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    return res.json({ result: updated });
+  } catch (e) {
+    console.error("updateUserAdmin ERROR:", e);
+
+    if (e.code === "23505") {
+      return res.status(409).json({ message: "Email already exists" });
+    }
+
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+const forceLogoutUserAdmin = async (req, res) => {
+  try {
+    const userId = Number(req.params?.id);
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return res.status(400).json({ message: "Invalid user id" });
+    }
+
+    const [existing] = await sql`
+      SELECT id
+      FROM users
+      WHERE id = ${userId}
+    `;
+
+    if (!existing) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    await sql`
+      UPDATE users
+      SET refresh_token = NULL
+      WHERE id = ${userId}
+    `;
+
+    return res.json({
+      message: "User has been force logged out",
+      result: { id: userId },
+    });
+  } catch (error) {
+    console.error("forceLogoutUserAdmin ERROR:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
 module.exports = {
     getUserDetails,
     updateUserRole,
@@ -322,5 +449,7 @@ module.exports = {
     updateCurrentUserPassword,
     getManagers,
     getBranches,
-    getLocations
+    getLocations,
+    updateUserAdmin,
+    forceLogoutUserAdmin
 };

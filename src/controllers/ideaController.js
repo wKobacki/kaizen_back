@@ -1,5 +1,15 @@
 const express = require('express');
 const sql = require('./db.js');
+const {
+  notifySupervisorApproved,
+  notifySupervisorRejected,
+  notifyDepartmentsAssigned,
+  notifyDepartmentDecision,
+  notifyCommissionCreated,
+  notifyCommissionMembersAdded,
+  notifyIdeaResponsiblesAssigned,
+  notifyIdeaCompleted,
+} = require("../services/ideaNotificationService.js");
 
 const uniqInt = (arr) => {
   const s = new Set();
@@ -229,19 +239,18 @@ const getIdeaDetails = async (req, res) => {
     }
 
     const roleName = norm(req.user?.role_name);
-    const isAdmin = roleName === "admin";
+    const roleId = Number(req.user?.role_id ?? req.user?.roleId ?? null);
+    const isAdmin = roleName === "admin" || roleId === 1;
     const isSupervisorRole = roleName === "supervisor";
 
     const ideaRows = await sql`
       SELECT
         i.*,
         d.name AS department_name,
-
         s.name  AS status_code,
-        s.name  AS status_name,        -- jak chcesz "ładną nazwę", to dodaj osobną kolumnę w DB
+        s.name  AS status_name,
         cs.name AS current_step_code,
-        cs.name AS current_step_name,  -- jw.
-
+        cs.name AS current_step_name,
         au.supervisor AS submitter_supervisor_id,
         sup.name AS submitter_supervisor_name,
         sup.surname AS submitter_supervisor_surname,
@@ -250,10 +259,8 @@ const getIdeaDetails = async (req, res) => {
       LEFT JOIN departments d ON d.id = i.department_id
       LEFT JOIN status s ON s.id = i.status_id
       LEFT JOIN status cs ON cs.id = i.current_step
-
       LEFT JOIN users au ON au.id = i.user_id
       LEFT JOIN users sup ON sup.id = au.supervisor
-
       WHERE i.id = ${ideaId}
       LIMIT 1
     `;
@@ -327,6 +334,7 @@ const getIdeaDetails = async (req, res) => {
       log,
       departments,
       access: {
+        role_id: Number.isInteger(roleId) ? roleId : null,
         role_name: roleName,
         isAdmin,
         isSupervisorRole,
@@ -346,65 +354,78 @@ const getIdeaDetails = async (req, res) => {
 };
 
 const supervisorApprove = async (req, res) => {
+  try {
+    const id = req.params.id;
+    const userId = req.user.id;
+
+    const statusApproved = await sql`
+      SELECT id FROM status WHERE name = 'supervisor_approved'
+    `;
+    const stepDeptReview = await sql`
+      SELECT id FROM status WHERE name = 'department_review'
+    `;
+
+    await sql`
+      UPDATE ideas
+      SET status_id = ${statusApproved[0].id},
+          current_step = ${stepDeptReview[0].id}
+      WHERE id = ${id}
+    `;
+
+    await sql`
+      INSERT INTO idea_workflow_log (idea_id, step, action, by_user, description)
+      VALUES (${id}, 'supervisor_review', 'approved', ${userId}, 'Supervisor approved')
+    `;
+
     try {
-        const id = req.params.id;
-        const userId = req.user.id;
-
-        const statusApproved = await sql`
-            SELECT id FROM status WHERE name = 'supervisor_approved'
-        `;
-        const stepDeptReview = await sql`
-            SELECT id FROM status WHERE name = 'department_review'
-        `;
-
-        await sql`
-            UPDATE ideas
-            SET status_id = ${statusApproved[0].id},
-                current_step = ${stepDeptReview[0].id}
-            WHERE id = ${id}
-        `;
-
-        await sql`
-            INSERT INTO idea_workflow_log (idea_id, step, action, by_user, description)
-            VALUES (${id}, 'supervisor_review', 'approved', ${userId}, 'Supervisor approved')
-        `;
-
-        return res.json({ message: "Supervisor approval saved" });
-
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ message: 'Internal server error' });
+      await notifySupervisorApproved({ ideaId: Number(id) });
+    } catch (mailErr) {
+      console.error("notifySupervisorApproved ERROR:", mailErr);
     }
+
+    return res.json({ message: "Supervisor approval saved" });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
 };
 
 const supervisorReject = async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { reason } = req.body;
+    const userId = req.user.id;
+
+    const statusRejected = await sql`
+      SELECT id FROM status WHERE name = 'supervisor_rejected'
+    `;
+
+    await sql`
+      UPDATE ideas
+      SET status_id = ${statusRejected[0].id},
+          current_step = NULL
+      WHERE id = ${id}
+    `;
+
+    await sql`
+      INSERT INTO idea_workflow_log (idea_id, step, action, by_user, description)
+      VALUES (${id}, 'supervisor_review', 'rejected', ${userId}, ${reason})
+    `;
+
     try {
-        const id = req.params.id;
-        const { reason } = req.body;
-        const userId = req.user.id;
-
-        const statusRejected = await sql`
-            SELECT id FROM status WHERE name = 'supervisor_rejected'
-        `;
-
-        await sql`
-            UPDATE ideas
-            SET status_id = ${statusRejected[0].id},
-                current_step = NULL
-            WHERE id = ${id}
-        `;
-
-        await sql`
-            INSERT INTO idea_workflow_log (idea_id, step, action, by_user, description)
-            VALUES (${id}, 'supervisor_review', 'rejected', ${userId}, ${reason})
-        `;
-
-        return res.json({ message: "Idea rejected by supervisor" });
-
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ message: 'Internal server error' });
+      await notifySupervisorRejected({
+        ideaId: Number(id),
+        reason: reason || "",
+      });
+    } catch (mailErr) {
+      console.error("notifySupervisorRejected ERROR:", mailErr);
     }
+
+    return res.json({ message: "Idea rejected by supervisor" });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
 };
 
 const assignDepartments = async (req, res) => {
@@ -449,7 +470,7 @@ const assignDepartments = async (req, res) => {
           VALUES (
             ${ideaId},
             ${d},
-            ${pending.id},   
+            ${pending.id},
             NULL,
             NULL,
             NULL
@@ -467,6 +488,12 @@ const assignDepartments = async (req, res) => {
         VALUES (${ideaId}, 'department_review', 'assigned', ${userId}, 'Departments assigned')
       `;
     });
+
+    try {
+      await notifyDepartmentsAssigned({ ideaId });
+    } catch (mailErr) {
+      console.error("notifyDepartmentsAssigned ERROR:", mailErr);
+    }
 
     return res.json({ message: "Departments assigned" });
   } catch (error) {
@@ -490,11 +517,13 @@ const departmentDecision = async (req, res) => {
     }
 
     let responsePayload = { message: "Decision saved" };
+    let shouldNotifyCommissionAutoCreated = false;
+    let autoCommissionSupervisorIds = [];
 
     await sql.begin(async (trx) => {
       const statusApprovedId = await getStatusId(trx, "department_approved");
       const statusRejectedId = await getStatusId(trx, "department_rejected");
-      const statusReviewId   = await getStatusId(trx, "department_review");
+      const statusReviewId = await getStatusId(trx, "department_review");
       const statusCommissionCreatedId = await getStatusId(trx, "commission_created");
 
       if (action === "approve") {
@@ -539,7 +568,9 @@ const departmentDecision = async (req, res) => {
           WHERE id = ${ideaId}
         `;
       } else if (allApproved) {
-        const { commissionId, addedCount } = await ensureCommissionWithDeptSupervisors(trx, ideaId, userId);
+        const { commissionId, addedCount, supervisorIds } = await ensureCommissionWithDeptSupervisors(trx, ideaId, userId);
+        shouldNotifyCommissionAutoCreated = true;
+        autoCommissionSupervisorIds = Array.isArray(supervisorIds) ? supervisorIds : [];
 
         await trx`
           UPDATE ideas
@@ -568,6 +599,29 @@ const departmentDecision = async (req, res) => {
       }
     });
 
+    try {
+      await notifyDepartmentDecision({
+        ideaId,
+        departmentId: Number(department_id),
+        action,
+        reason: reason || "",
+      });
+    } catch (mailErr) {
+      console.error("notifyDepartmentDecision ERROR:", mailErr);
+    }
+
+    if (shouldNotifyCommissionAutoCreated) {
+      try {
+        await notifyCommissionCreated({
+          ideaId,
+          memberIds: autoCommissionSupervisorIds,
+          source: "auto",
+        });
+      } catch (mailErr) {
+        console.error("notifyCommissionCreated(auto) ERROR:", mailErr);
+      }
+    }
+
     return res.json(responsePayload);
   } catch (error) {
     console.error("departmentDecision ERROR:", error);
@@ -576,103 +630,116 @@ const departmentDecision = async (req, res) => {
 };
 
 const createCommission = async (req, res) => {
-    try {
-        const ideaId = req.params.id;
-        const { members } = req.body;
-        const userId = req.user.id;
+  try {
+    const ideaId = req.params.id;
+    const { members } = req.body;
+    const userId = req.user.id;
 
-        const existing = await sql`
-            SELECT id FROM commissions WHERE idea_id = ${ideaId}
-        `;
+    const existing = await sql`
+      SELECT id FROM commissions WHERE idea_id = ${ideaId}
+    `;
 
-        if (existing.length > 0) {
-            return res.status(400).json({ message: "Commission already exists for this idea" });
-        }
-
-
-        const commission = await sql`
-            INSERT INTO commissions (idea_id, created_by)
-            VALUES (${ideaId}, ${userId})
-            RETURNING id
-        `;
-
-        for (const member of members) {
-            await sql`
-                INSERT INTO commission_members (commission_id, user_id)
-                VALUES (${commission[0].id}, ${member})
-            `;
-        }
-
-        const statusCommission = await sql`SELECT id FROM status WHERE name = 'commission_created'`;
-
-        await sql`
-          UPDATE ideas
-          SET status_id = ${statusCommission[0].id},
-              current_step = ${statusCommission[0].id}
-          WHERE id = ${ideaId}
-        `;
-
-        await sql`
-            INSERT INTO idea_workflow_log (idea_id, step, action, by_user, description)
-            VALUES (${ideaId}, 'commission', 'created', ${userId}, 'Commission created')
-        `;
-
-        return res.json({ message: "Commission created" });
-
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ message: 'Internal server error' });
+    if (existing.length > 0) {
+      return res.status(400).json({ message: "Commission already exists for this idea" });
     }
+
+    const commission = await sql`
+      INSERT INTO commissions (idea_id, created_by)
+      VALUES (${ideaId}, ${userId})
+      RETURNING id
+    `;
+
+    for (const member of members) {
+      await sql`
+        INSERT INTO commission_members (commission_id, user_id)
+        VALUES (${commission[0].id}, ${member})
+      `;
+    }
+
+    const statusCommission = await sql`SELECT id FROM status WHERE name = 'commission_created'`;
+
+    await sql`
+      UPDATE ideas
+      SET status_id = ${statusCommission[0].id},
+          current_step = ${statusCommission[0].id}
+      WHERE id = ${ideaId}
+    `;
+
+    await sql`
+      INSERT INTO idea_workflow_log (idea_id, step, action, by_user, description)
+      VALUES (${ideaId}, 'commission', 'created', ${userId}, 'Commission created')
+    `;
+
+    try {
+      await notifyCommissionCreated({
+        ideaId: Number(ideaId),
+        memberIds: Array.isArray(members) ? members : [],
+        source: "manual",
+      });
+    } catch (mailErr) {
+      console.error("notifyCommissionCreated(manual) ERROR:", mailErr);
+    }
+
+    return res.json({ message: "Commission created" });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
 };
 
 const completeIdea = async (req, res) => {
+  try {
+    const id = req.params.id;
+    const userId = req.user.id;
+
+    const statusCompleted = await sql`
+      SELECT id FROM status WHERE name = 'completed'
+    `;
+
+    await sql`
+      UPDATE ideas
+      SET status_id = ${statusCompleted[0].id}
+      WHERE id = ${id}
+    `;
+
+    await sql`
+      INSERT INTO idea_workflow_log (idea_id, step, action, by_user, description)
+      VALUES (${id}, 'final', 'completed', ${userId}, 'Idea implemented successfully')
+    `;
+
     try {
-        const id = req.params.id;
-        const userId = req.user.id;
-
-        const statusCompleted = await sql`
-            SELECT id FROM status WHERE name = 'completed'
-        `;
-
-        await sql`
-            UPDATE ideas
-            SET status_id = ${statusCompleted[0].id}
-            WHERE id = ${id}
-        `;
-
-        await sql`
-            INSERT INTO idea_workflow_log (idea_id, step, action, by_user, description)
-            VALUES (${id}, 'final', 'completed', ${userId}, 'Idea implemented successfully')
-        `;
-
-        return res.json({ message: "Idea marked as completed" });
-
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ message: 'Internal server error' });
+      await notifyIdeaCompleted({ ideaId: Number(id) });
+    } catch (mailErr) {
+      console.error("notifyIdeaCompleted ERROR:", mailErr);
     }
+
+    return res.json({ message: "Idea marked as completed" });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
 };
 
 const getIdeaWorkflow = async (req, res) => {
-    try {
-        const ideaId = req.params.id;
+  try {
+    const ideaId = req.params.id;
 
-        const log = await sql`
-            SELECT 
-                l.*,
-                u.name AS by_user_name,
-                u.surname AS by_user_surname
-            FROM idea_workflow_log l
-            LEFT JOIN users u ON u.id = l.by_user
-            WHERE l.idea_id = ${ideaId}
-            ORDER BY l.created_at ASC
-        `;
+    const log = await sql`
+      SELECT 
+        l.*,
+        u.name AS by_user_name,
+        u.surname AS by_user_surname
+      FROM idea_workflow_log l
+      LEFT JOIN users u ON u.id = l.by_user
+      WHERE l.idea_id = ${ideaId}
+      ORDER BY l.created_at ASC
+    `;
 
-        return res.status(200).json({ result: log });
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ message: 'Internal server error' });
-    }
+    return res.status(200).json({ result: log });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
 };
 
 const getIdeaDepartmentsShort = async (req, res) => {
@@ -688,10 +755,8 @@ const getIdeaDepartmentsShort = async (req, res) => {
         d.id,
         d.department_id,
         dept.name AS department_name,
-
         d.status_id,
         s.name AS status_name,
-
         d.decided_by,
         u.name AS decided_by_name,
         u.surname AS decided_by_surname,
@@ -710,7 +775,7 @@ const getIdeaDepartmentsShort = async (req, res) => {
     console.error(error);
     return res.status(500).json({ message: "Internal server error" });
   }
-};  
+};
 
 const saveCommissionGoals = async (req, res) => {
   try {
@@ -845,7 +910,7 @@ const checkCommissionExists = async (req, res) => {
       exists: true,
       commission_id: commissionId,
       isMember: me.length > 0,
-      members, 
+      members,
     });
   } catch (error) {
     console.error("checkCommissionExists ERROR:", error);
@@ -906,116 +971,142 @@ const getCommissionGoals = async (req, res) => {
 };
 
 const updateCommissionGoalStatus = async (req, res) => {
-    try {
-        const ideaId = req.params.id;
-        const { goalId, is_done } = req.body;
+  try {
+    const ideaId = req.params.id;
+    const { goalId, is_done } = req.body;
 
-        if (goalId === undefined) {
-            return res.status(400).json({ message: "goalId is required" });
-        }
-
-        if (typeof is_done !== "boolean") {
-            return res.status(400).json({ message: "is_done must be boolean" });
-        }
-
-        const commission = await sql`
-            SELECT id 
-            FROM commissions
-            WHERE idea_id = ${ideaId}
-            LIMIT 1
-        `;
-
-        if (commission.length === 0) {
-            return res.status(404).json({ message: "Commission not found" });
-        }
-
-        const commissionId = commission[0].id;
-
-        const goal = await sql`
-            SELECT id
-            FROM commission_goals
-            WHERE id = ${goalId}
-              AND commission_id = ${commissionId}
-        `;
-
-        if (goal.length === 0) {
-            return res.status(404).json({ message: "Goal not found" });
-        }
-
-        await sql`
-            UPDATE commission_goals
-            SET is_done = ${is_done}
-            WHERE id = ${goalId}
-              AND commission_id = ${commissionId}
-        `;
-
-        return res.json({ message: "Goal updated successfully" });
-
-    } catch (error) {
-        console.error("PATCH GOAL ERROR:", error);
-        return res.status(500).json({ message: "Internal server error" });
+    if (goalId === undefined) {
+      return res.status(400).json({ message: "goalId is required" });
     }
+
+    if (typeof is_done !== "boolean") {
+      return res.status(400).json({ message: "is_done must be boolean" });
+    }
+
+    const commission = await sql`
+      SELECT id 
+      FROM commissions
+      WHERE idea_id = ${ideaId}
+      LIMIT 1
+    `;
+
+    if (commission.length === 0) {
+      return res.status(404).json({ message: "Commission not found" });
+    }
+
+    const commissionId = commission[0].id;
+
+    const goal = await sql`
+      SELECT id
+      FROM commission_goals
+      WHERE id = ${goalId}
+        AND commission_id = ${commissionId}
+    `;
+
+    if (goal.length === 0) {
+      return res.status(404).json({ message: "Goal not found" });
+    }
+
+    await sql`
+      UPDATE commission_goals
+      SET is_done = ${is_done}
+      WHERE id = ${goalId}
+        AND commission_id = ${commissionId}
+    `;
+
+    return res.json({ message: "Goal updated successfully" });
+  } catch (error) {
+    console.error("PATCH GOAL ERROR:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
 };
 
 const updateCommissionMembers = async (req, res) => {
-    try {
-        const ideaId = req.params.id;
-        const { members } = req.body;
+  try {
+    const ideaId = Number(req.params.id);
+    const { members } = req.body;
 
-        if (!Array.isArray(members)) {
-            return res.status(400).json({ message: "Not supported format" });
-        }
-
-        const existing = await sql`
-            SELECT id FROM commissions WHERE idea_id = ${ideaId}
-        `;
-
-        if (existing.length === 0) {
-            return res.status(400).json({ message: "Commission not exists" });
-        }
-
-        const commissionId = existing[0].id;
-
-        await sql`
-            DELETE FROM commission_members 
-            WHERE commission_id = ${commissionId}
-        `;
-
-        for (const memberId of members) {
-            await sql`
-                INSERT INTO commission_members (commission_id, user_id)
-                VALUES (${commissionId}, ${memberId})
-            `;
-        }
-
-        return res.json({
-            message: "Commission updated successfully",
-            commissionId
-        });
-
-    } catch (error) {
-        console.error("UPDATE MEMBERS ERROR:", error);
-        return res.status(500).json({ message: "Internal server error" });
+    if (!Number.isInteger(ideaId)) {
+      return res.status(400).json({ message: "Invalid idea id" });
     }
+
+    if (!Array.isArray(members)) {
+      return res.status(400).json({ message: "Not supported format" });
+    }
+
+    const normalizedMembers = [...new Set(members.map(Number).filter(Number.isInteger))];
+
+    const existing = await sql`
+      SELECT id FROM commissions WHERE idea_id = ${ideaId}
+    `;
+
+    if (existing.length === 0) {
+      return res.status(400).json({ message: "Commission not exists" });
+    }
+
+    const commissionId = existing[0].id;
+
+    const existingMembersRows = await sql`
+      SELECT user_id
+      FROM commission_members
+      WHERE commission_id = ${commissionId}
+    `;
+    const existingMemberIds = existingMembersRows
+      .map((r) => Number(r.user_id))
+      .filter(Number.isInteger);
+
+    const existingSet = new Set(existingMemberIds);
+    const newlyAddedIds = normalizedMembers.filter((uid) => !existingSet.has(uid));
+
+    await sql`
+      DELETE FROM commission_members 
+      WHERE commission_id = ${commissionId}
+    `;
+
+    for (const memberId of normalizedMembers) {
+      await sql`
+        INSERT INTO commission_members (commission_id, user_id)
+        VALUES (${commissionId}, ${memberId})
+      `;
+    }
+
+    if (newlyAddedIds.length > 0) {
+      try {
+        await notifyCommissionMembersAdded({
+          ideaId,
+          userIds: newlyAddedIds,
+        });
+      } catch (mailErr) {
+        console.error("notifyCommissionMembersAdded ERROR:", mailErr);
+      }
+    }
+
+    return res.json({
+      message: "Commission updated successfully",
+      commissionId
+    });
+  } catch (error) {
+    console.error("UPDATE MEMBERS ERROR:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
 };
 
 const getCommissionMembers = async (req, res) => {
-    try {
-        const ideaId = req.params.id;
+  try {
+    const ideaId = req.params.id;
 
-        const commission = await sql`
-            SELECT user_id 
-            FROM commission_members cm
-            JOIN commissions c ON c.id = cm.commission_id
-            WHERE c.idea_id = ${ideaId}
-        `;
+    const commission = await sql`
+      SELECT user_id 
+      FROM commission_members cm
+      JOIN commissions c ON c.id = cm.commission_id
+      WHERE c.idea_id = ${ideaId}
+    `;
 
-        return res.json({message: "Success", members: commission.map(c => c.user_id)});
-
-    } catch (error) {
-        console.error("GET COMMISSION MEMBERS ERROR:", error);
-        return res.status(500).json({ message: "Internal server error" });
-    }
+    return res.json({ message: "Success", members: commission.map(c => c.user_id) });
+  } catch (error) {
+    console.error("GET COMMISSION MEMBERS ERROR:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
 };
 
 const getIdeaResponsibles = async (req, res) => {
@@ -1079,6 +1170,19 @@ const saveIdeaResponsibles = async (req, res) => {
     for (const x of normalized) map.set(x.user_id, x);
     const unique = [...map.values()];
 
+    const existingRows = await sql`
+      SELECT user_id
+      FROM idea_responsibles
+      WHERE idea_id = ${ideaId}
+    `;
+    const existingIds = existingRows.map((r) => Number(r.user_id)).filter(Number.isInteger);
+    const existingSet = new Set(existingIds);
+
+    const newResponsibleIds = unique
+      .map((r) => Number(r.user_id))
+      .filter(Number.isInteger)
+      .filter((uid) => !existingSet.has(uid));
+
     await sql.begin(async (trx) => {
       await trx`DELETE FROM idea_responsibles WHERE idea_id = ${ideaId}`;
 
@@ -1089,6 +1193,17 @@ const saveIdeaResponsibles = async (req, res) => {
         `;
       }
     });
+
+    if (newResponsibleIds.length > 0) {
+      try {
+        await notifyIdeaResponsiblesAssigned({
+          ideaId,
+          userIds: newResponsibleIds,
+        });
+      } catch (mailErr) {
+        console.error("notifyIdeaResponsiblesAssigned ERROR:", mailErr);
+      }
+    }
 
     return res.json({ message: "Responsibles saved" });
   } catch (e) {
@@ -1178,26 +1293,26 @@ const resolveUsersByIds = async (req, res) => {
 };
 
 module.exports = {
-    createIdea,
-    getAllIdeas,
-    getIdeaDetails,
-    supervisorApprove,
-    supervisorReject,
-    assignDepartments,
-    departmentDecision,
-    createCommission,
-    completeIdea,
-    getIdeaWorkflow,
-    getIdeaDepartmentsShort,
-    saveCommissionGoals,
-    checkCommissionExists, 
-    getCommissionGoals,
-    updateCommissionGoalStatus,
-    updateCommissionMembers,
-    getCommissionMembers,
-    getIdeaResponsibles,
-    saveIdeaResponsibles,
-    getCommissionPeople,
-    getCommissionSpecificMembers, 
-    resolveUsersByIds
+  createIdea,
+  getAllIdeas,
+  getIdeaDetails,
+  supervisorApprove,
+  supervisorReject,
+  assignDepartments,
+  departmentDecision,
+  createCommission,
+  completeIdea,
+  getIdeaWorkflow,
+  getIdeaDepartmentsShort,
+  saveCommissionGoals,
+  checkCommissionExists,
+  getCommissionGoals,
+  updateCommissionGoalStatus,
+  updateCommissionMembers,
+  getCommissionMembers,
+  getIdeaResponsibles,
+  saveIdeaResponsibles,
+  getCommissionPeople,
+  getCommissionSpecificMembers,
+  resolveUsersByIds
 };

@@ -3,7 +3,7 @@ const sql = require("./db");
 const getRoles = async (req, res) => {
   try {
     const rows = await sql`
-      SELECT id, code, name
+      SELECT id, name
       FROM roles
       ORDER BY id ASC
     `;
@@ -17,7 +17,7 @@ const getRoles = async (req, res) => {
 const getIdeaStatuses = async (req, res) => {
   try {
     const rows = await sql`
-      SELECT id, code, name
+      SELECT id, name
       FROM idea_statuses
       ORDER BY id ASC
     `;
