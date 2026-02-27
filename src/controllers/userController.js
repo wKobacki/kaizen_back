@@ -1,6 +1,11 @@
 const express = require('express');
 const sql = require('./db.js');
 const bcrypt = require('bcrypt');
+const { sendPasswordResetEmail } = require("./mailerController");
+
+const generateVerificationCode = () => {
+  return String(Math.floor(100000 + Math.random() * 900000));
+};
 
 const getUserDetails = async (req, res) => {
   try {
@@ -438,6 +443,136 @@ const forceLogoutUserAdmin = async (req, res) => {
   }
 };
 
+const requestPasswordReset = async (req, res) => {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+
+    if (!email) {
+      return res.status(400).json({ message: "Email is required" });
+    }
+
+    const [user] = await sql`
+      SELECT id, email, name, surname
+      FROM users
+      WHERE LOWER(email) = ${email}
+      LIMIT 1
+    `;
+
+    if (!user) {
+      return res.status(404).json({ message: "User with this email was not found" });
+    }
+
+    const verificationCode = generateVerificationCode();
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+
+    await sql`
+      UPDATE users
+      SET
+        verification_code = ${verificationCode},
+        verification_code_expires_at = ${expiresAt}
+      WHERE id = ${user.id}
+    `;
+
+    await sendPasswordResetEmail(
+      user.email,
+      user.name || "",
+      user.surname || "",
+      verificationCode
+    );
+
+    return res.json({
+      message: "Password reset code sent successfully",
+    });
+  } catch (error) {
+    console.error("requestPasswordReset ERROR:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+const confirmPasswordReset = async (req, res) => {
+  try {
+    const verificationCode = String(req.body?.verificationCode || "").trim();
+    const newPassword = String(req.body?.newPassword || "");
+
+    if (!verificationCode || !newPassword) {
+      return res.status(400).json({ message: "verificationCode and newPassword are required" });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({ message: "Password must be at least 8 characters long" });
+    }
+
+    const now = new Date();
+
+    const [user] = await sql`
+      SELECT id, password, verification_code, verification_code_expires_at
+      FROM users
+      WHERE verification_code = ${verificationCode}
+      LIMIT 1
+    `;
+
+    if (!user) {
+      return res.status(400).json({ message: "Invalid verification code" });
+    }
+
+    if (!user.verification_code_expires_at || new Date(user.verification_code_expires_at) < now) {
+      return res.status(400).json({ message: "Verification code expired" });
+    }
+
+    const sameAsOld = await bcrypt.compare(newPassword, user.password);
+    if (sameAsOld) {
+      return res.status(400).json({ message: "New password cannot be the same as old password" });
+    }
+
+    const hashed = await bcrypt.hash(newPassword, 10);
+
+    await sql`
+      UPDATE users
+      SET
+        password = ${hashed},
+        verification_code = NULL,
+        verification_code_expires_at = NULL,
+        refresh_token = NULL
+      WHERE id = ${user.id}
+    `;
+
+    return res.json({ message: "Password has been reset successfully" });
+  } catch (error) {
+    console.error("confirmPasswordReset ERROR:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+const verifyPasswordResetCode = async (req, res) => {
+  try {
+    const verificationCode = String(req.body?.verificationCode || "").trim();
+
+    if (!verificationCode) {
+      return res.status(400).json({ message: "verificationCode is required" });
+    }
+
+    const [user] = await sql`
+      SELECT id, verification_code_expires_at
+      FROM users
+      WHERE verification_code = ${verificationCode}
+      LIMIT 1
+    `;
+
+    if (!user) {
+      return res.status(400).json({ message: "Invalid verification code" });
+    }
+
+    if (!user.verification_code_expires_at || new Date(user.verification_code_expires_at) < new Date()) {
+      return res.status(400).json({ message: "Verification code expired" });
+    }
+
+    return res.json({ message: "Verification code is valid" });
+  } catch (error) {
+    console.error("verifyPasswordResetCode ERROR:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
 module.exports = {
     getUserDetails,
     updateUserRole,
@@ -451,5 +586,8 @@ module.exports = {
     getBranches,
     getLocations,
     updateUserAdmin,
-    forceLogoutUserAdmin
+    forceLogoutUserAdmin,
+    requestPasswordReset,
+    confirmPasswordReset,
+    verifyPasswordResetCode
 };

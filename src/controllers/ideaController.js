@@ -95,7 +95,7 @@ const ensureCommissionMembers = async (ideaId, userIds, trx = sql) => {
 
   if (ids.length === 0) {
     console.log("[ensureCommissionMembers] skip: no ids");
-    return;
+    return { addedUserIds: [] };
   }
 
   const rows = await trx`SELECT id FROM commissions WHERE idea_id = ${ideaId}`;
@@ -103,7 +103,7 @@ const ensureCommissionMembers = async (ideaId, userIds, trx = sql) => {
 
   if (!rows?.length) {
     console.log("[ensureCommissionMembers] skip: no commission for ideaId", ideaId);
-    return;
+    return { addedUserIds: [] };
   }
 
   const commissionId = rows[0].id;
@@ -124,8 +124,10 @@ const ensureCommissionMembers = async (ideaId, userIds, trx = sql) => {
 
   if (toAdd.length === 0) {
     console.log("[ensureCommissionMembers] skip: all already members");
-    return;
+    return { addedUserIds: [] };
   }
+
+  const addedUserIds = [];
 
   for (const uid of toAdd) {
     const inserted = await trx`
@@ -137,10 +139,13 @@ const ensureCommissionMembers = async (ideaId, userIds, trx = sql) => {
 
     if (inserted?.length) {
       console.log("[ensureCommissionMembers] inserted:", inserted[0]);
+      addedUserIds.push(uid);
     } else {
       console.log("[ensureCommissionMembers] skipped by conflict:", { commissionId, uid });
     }
   }
+
+  return { addedUserIds };
 };
 
 const createIdea = async (req, res) => {
@@ -810,8 +815,13 @@ const saveCommissionGoals = async (req, res) => {
       return [a];
     });
 
+    let commissionMembersAddedByGoals = [];
+
     await sql.begin(async (trx) => {
-      await ensureCommissionMembers(ideaId, assignedUserIds, trx);
+      const ensureResult = await ensureCommissionMembers(ideaId, assignedUserIds, trx);
+      commissionMembersAddedByGoals = Array.isArray(ensureResult?.addedUserIds)
+        ? ensureResult.addedUserIds
+        : [];
 
       const oldGoals = await trx`
         SELECT id FROM commission_goals WHERE commission_id = ${commissionId}
@@ -862,6 +872,17 @@ const saveCommissionGoals = async (req, res) => {
         }
       }
     });
+
+    if (commissionMembersAddedByGoals.length > 0) {
+      try {
+        await notifyCommissionMembersAdded({
+          ideaId,
+          userIds: commissionMembersAddedByGoals,
+        });
+      } catch (mailErr) {
+        console.error("notifyCommissionMembersAdded(from saveCommissionGoals) ERROR:", mailErr);
+      }
+    }
 
     return res.json({ message: "Commission goals saved successfully" });
   } catch (error) {

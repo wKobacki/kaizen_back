@@ -104,7 +104,8 @@ const resetPassword =  async (req, res) => {
     }
 }
 
-module.exports = {handlePasswordReset, 
+module.exports = {
+    handlePasswordReset, 
     restorePassword,
     resetPassword
 };
