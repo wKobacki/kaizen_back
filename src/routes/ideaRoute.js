@@ -75,6 +75,18 @@ router.get(
   controller.getCommissionSpecificMembers
 );
 
+router.get(
+  "/:id/commission/chairman",
+  requireCommissionAccess({ allowOwner: true, mode: "read" }),
+  controller.getCommissionChairman
+);
+
+router.put(
+  "/:id/commission/chairman",
+  requireCommissionAccess({ mode: "write" }),
+  controller.setCommissionChairman
+);
+
 router.post("/:id/complete", controller.completeIdea);
 
 router.get("/:id/departments", controller.getIdeaDepartmentsShort);

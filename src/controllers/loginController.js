@@ -5,7 +5,14 @@ const { ACCESS_TOKEN_SECRET, REFRESH_TOKEN_SECRET } = require("../../config");
 
 const handleLogin = async (req, res) => {
   try {
-    const { email, password } = req.body || {};
+    const { email: rawEmail, password: rawPassword } = req.body || {};
+
+    if (rawEmail == null || rawPassword == null) {
+      return res.status(400).json({ message: "Email and password are required" });
+    }
+
+    const email = String(rawEmail).trim().toLowerCase();
+    const password = String(rawPassword);
 
     if (!email || !password) {
       return res.status(400).json({ message: "Email and password are required" });
@@ -13,14 +20,14 @@ const handleLogin = async (req, res) => {
 
     const foundUser = await sql`
       SELECT 
-        id, 
-        email, 
-        password, 
+        id,
+        email,
+        password,
         role_id,
         department_id,
         is_verified
       FROM users
-      WHERE email = ${String(email).trim()}
+      WHERE LOWER(email) = ${email}
       LIMIT 1
     `;
 
@@ -52,7 +59,7 @@ const handleLogin = async (req, res) => {
 
     await sql`
       UPDATE users
-      SET 
+      SET
         refresh_token = ${refreshToken},
         last_login = NOW()
       WHERE id = ${user.id}
@@ -60,7 +67,7 @@ const handleLogin = async (req, res) => {
 
     res.cookie("jwt", refreshToken, {
       httpOnly: true,
-      secure: false, 
+      secure: false,
       sameSite: "lax",
       maxAge: 24 * 60 * 60 * 1000,
     });

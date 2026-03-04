@@ -9,6 +9,7 @@ const {
   notifyCommissionMembersAdded,
   notifyIdeaResponsiblesAssigned,
   notifyIdeaCompleted,
+  notifyCommissionChairmanAssigned
 } = require("../services/ideaNotificationService.js");
 
 const uniqInt = (arr) => {
@@ -217,7 +218,8 @@ const getAllIdeas = async (req, res) => {
         i.id,
         i.title,
         d.name AS department,
-        s.name AS status
+        s.name AS status,
+        i.created_at
       FROM ideas i
       LEFT JOIN departments d ON d.id = i.department_id
       LEFT JOIN status s ON s.id = i.status_id
@@ -694,34 +696,91 @@ const createCommission = async (req, res) => {
 
 const completeIdea = async (req, res) => {
   try {
-    const id = req.params.id;
-    const userId = req.user.id;
+    const ideaId = Number(req.params.id);
+    const userId = Number(req.user?.id);
+    const userRoleId = Number(req.user?.role_id);
 
-    const statusCompleted = await sql`
-      SELECT id FROM status WHERE name = 'completed'
+    if (!Number.isInteger(ideaId)) {
+      return res.status(400).json({ message: "Invalid idea id" });
+    }
+
+    if (!Number.isInteger(userId)) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const ideaRows = await sql`
+      SELECT id, status_id, current_step
+      FROM ideas
+      WHERE id = ${ideaId}
+      LIMIT 1
     `;
 
-    await sql`
-      UPDATE ideas
-      SET status_id = ${statusCompleted[0].id}
-      WHERE id = ${id}
+    if (ideaRows.length === 0) {
+      return res.status(404).json({ message: "Idea not found" });
+    }
+
+    const statusCompletedRows = await sql`
+      SELECT id FROM status WHERE name = 'completed' LIMIT 1
     `;
 
-    await sql`
-      INSERT INTO idea_workflow_log (idea_id, step, action, by_user, description)
-      VALUES (${id}, 'final', 'completed', ${userId}, 'Idea implemented successfully')
+    if (statusCompletedRows.length === 0) {
+      return res.status(500).json({ message: "Completed status is missing in database" });
+    }
+
+    const completedStatusId = Number(statusCompletedRows[0].id);
+
+    const chairmanRows = await sql`
+      SELECT c.chairman_user_id
+      FROM commissions c
+      WHERE c.idea_id = ${ideaId}
+      LIMIT 1
     `;
+
+    const chairmanUserId = Number(chairmanRows?.[0]?.chairman_user_id);
+
+    const isAdmin = userRoleId === 1;
+    const isChairman = Number.isInteger(chairmanUserId) && chairmanUserId === userId;
+
+    if (!isAdmin && !isChairman) {
+      return res.status(403).json({
+        message: "Only admin or commission chairman can complete this idea",
+      });
+    }
+
+    await sql.begin(async (trx) => {
+      await trx`
+        UPDATE ideas
+        SET
+          status_id = ${completedStatusId},
+          current_step = ${completedStatusId}
+        WHERE id = ${ideaId}
+      `;
+
+      await trx`
+        INSERT INTO idea_workflow_log (idea_id, step, action, by_user, description)
+        VALUES (
+          ${ideaId},
+          'final',
+          'completed',
+          ${userId},
+          ${isChairman ? 'Idea implemented successfully (completed by commission chairman)' : 'Idea implemented successfully'}
+        )
+      `;
+    });
 
     try {
-      await notifyIdeaCompleted({ ideaId: Number(id) });
+      await notifyIdeaCompleted({ ideaId });
     } catch (mailErr) {
       console.error("notifyIdeaCompleted ERROR:", mailErr);
     }
 
-    return res.json({ message: "Idea marked as completed" });
+    return res.json({
+      message: "Idea marked as completed",
+      completedBy: isChairman ? "chairman" : "admin",
+    });
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: 'Internal server error' });
+    console.error("COMPLETE IDEA ERROR:", error);
+    return res.status(500).json({ message: "Internal server error" });
   }
 };
 
@@ -1058,20 +1117,24 @@ const updateCommissionMembers = async (req, res) => {
     const normalizedMembers = [...new Set(members.map(Number).filter(Number.isInteger))];
 
     const existing = await sql`
-      SELECT id FROM commissions WHERE idea_id = ${ideaId}
+      SELECT id
+      FROM commissions
+      WHERE idea_id = ${ideaId}
+      LIMIT 1
     `;
 
     if (existing.length === 0) {
       return res.status(400).json({ message: "Commission not exists" });
     }
 
-    const commissionId = existing[0].id;
+    const commissionId = Number(existing[0].id);
 
     const existingMembersRows = await sql`
       SELECT user_id
       FROM commission_members
       WHERE commission_id = ${commissionId}
     `;
+
     const existingMemberIds = existingMembersRows
       .map((r) => Number(r.user_id))
       .filter(Number.isInteger);
@@ -1079,8 +1142,17 @@ const updateCommissionMembers = async (req, res) => {
     const existingSet = new Set(existingMemberIds);
     const newlyAddedIds = normalizedMembers.filter((uid) => !existingSet.has(uid));
 
+    const chairmanRows = await sql`
+      SELECT chairman_user_id
+      FROM commissions
+      WHERE id = ${commissionId}
+      LIMIT 1
+    `;
+
+    const currentChairmanId = Number(chairmanRows?.[0]?.chairman_user_id);
+
     await sql`
-      DELETE FROM commission_members 
+      DELETE FROM commission_members
       WHERE commission_id = ${commissionId}
     `;
 
@@ -1089,6 +1161,19 @@ const updateCommissionMembers = async (req, res) => {
         INSERT INTO commission_members (commission_id, user_id)
         VALUES (${commissionId}, ${memberId})
       `;
+    }
+
+    let chairmanCleared = false;
+    if (
+      Number.isInteger(currentChairmanId) &&
+      !normalizedMembers.includes(currentChairmanId)
+    ) {
+      await sql`
+        UPDATE commissions
+        SET chairman_user_id = NULL
+        WHERE id = ${commissionId}
+      `;
+      chairmanCleared = true;
     }
 
     if (newlyAddedIds.length > 0) {
@@ -1104,7 +1189,8 @@ const updateCommissionMembers = async (req, res) => {
 
     return res.json({
       message: "Commission updated successfully",
-      commissionId
+      commissionId,
+      chairmanCleared,
     });
   } catch (error) {
     console.error("UPDATE MEMBERS ERROR:", error);
@@ -1313,6 +1399,141 @@ const resolveUsersByIds = async (req, res) => {
   }
 };
 
+const getCommissionChairman = async (req, res) => {
+  try {
+    const ideaId = Number(req.params.id);
+
+    if (!Number.isInteger(ideaId)) {
+      return res.status(400).json({ message: "Invalid idea id" });
+    }
+
+    const rows = await sql`
+      SELECT
+        c.id AS commission_id,
+        c.chairman_user_id,
+        u.id AS user_id,
+        u.name,
+        u.surname,
+        u.email
+      FROM commissions c
+      LEFT JOIN users u ON u.id = c.chairman_user_id
+      WHERE c.idea_id = ${ideaId}
+      LIMIT 1
+    `;
+
+    if (rows.length === 0) {
+      return res.status(404).json({ message: "Commission not found" });
+    }
+
+    const row = rows[0];
+
+    return res.json({
+      message: "Success",
+      commissionId: row.commission_id,
+      chairman: row.chairman_user_id
+        ? {
+            id: row.user_id,
+            user_id: row.user_id,
+            name: row.name,
+            surname: row.surname,
+            email: row.email,
+          }
+        : null,
+    });
+  } catch (error) {
+    console.error("GET COMMISSION CHAIRMAN ERROR:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+const setCommissionChairman = async (req, res) => {
+  try {
+    const ideaId = Number(req.params.id);
+    const chairmanUserId = Number(req.body?.chairmanUserId);
+    const byUserId = req.user?.id;
+
+    if (!Number.isInteger(ideaId)) {
+      return res.status(400).json({ message: "Invalid idea id" });
+    }
+
+    if (!Number.isInteger(chairmanUserId)) {
+      return res.status(400).json({ message: "Invalid chairman user id" });
+    }
+
+    const commissionRows = await sql`
+      SELECT id
+      FROM commissions
+      WHERE idea_id = ${ideaId}
+      LIMIT 1
+    `;
+
+    if (commissionRows.length === 0) {
+      return res.status(404).json({ message: "Commission not found" });
+    }
+
+    const commissionId = Number(commissionRows[0].id);
+
+    // walidacja: przewodniczący musi być członkiem komisji
+    const memberRows = await sql`
+      SELECT 1
+      FROM commission_members
+      WHERE commission_id = ${commissionId}
+        AND user_id = ${chairmanUserId}
+      LIMIT 1
+    `;
+
+    if (memberRows.length === 0) {
+      return res.status(400).json({ message: "Selected user is not a commission member" });
+    }
+
+    await sql`
+      UPDATE commissions
+      SET chairman_user_id = ${chairmanUserId}
+      WHERE id = ${commissionId}
+    `;
+
+    try {
+      await sql`
+        INSERT INTO idea_workflow_log (idea_id, step, action, by_user, description)
+        VALUES (
+          ${ideaId},
+          'commission',
+          'chairman_set',
+          ${byUserId || null},
+          ${`Chairman set to user #${chairmanUserId}`}
+        )
+      `;
+    } catch (logErr) {
+      console.error("Chairman workflow log insert error:", logErr);
+    }
+
+    const userRows = await sql`
+      SELECT id, name, surname, email
+      FROM users
+      WHERE id = ${chairmanUserId}
+      LIMIT 1
+    `;
+
+    try {
+      await notifyCommissionChairmanAssigned({
+        ideaId,
+        chairmanUserId,
+        assignedByUserId: byUserId || null,
+      });
+    } catch (mailErr) {
+      console.error("notifyCommissionChairmanAssigned ERROR:", mailErr);
+    }
+    return res.json({
+      message: "Chairman set successfully",
+      commissionId,
+      chairman: userRows[0] || { id: chairmanUserId },
+    });
+  } catch (error) {
+    console.error("SET COMMISSION CHAIRMAN ERROR:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
 module.exports = {
   createIdea,
   getAllIdeas,
@@ -1335,5 +1556,7 @@ module.exports = {
   saveIdeaResponsibles,
   getCommissionPeople,
   getCommissionSpecificMembers,
-  resolveUsersByIds
+  resolveUsersByIds,
+  getCommissionChairman,
+  setCommissionChairman,
 };

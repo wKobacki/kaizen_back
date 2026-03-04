@@ -357,6 +357,102 @@ const notifyIdeaCompleted = async ({ ideaId }) => {
   await sendMailSafe({ to: idea.author_email, subject, text });
 };
 
+const notifyCommissionChairmanAssigned = async ({ ideaId, chairmanUserId, assignedByUserId = null }) => {
+  const idea = await getIdeaCore(ideaId);
+  if (!idea) return;
+
+  const chairman = await getUserById(Number(chairmanUserId));
+  if (!chairman?.email) return;
+
+  const assignedBy =
+    Number.isInteger(Number(assignedByUserId)) && Number(assignedByUserId) > 0
+      ? await getUserById(Number(assignedByUserId)).catch(() => null)
+      : null;
+
+  const subject = `Wyznaczono Cię na przewodniczącego komisji (pomysł #${idea.id})`;
+
+  const text = [
+    `Cześć ${safeName(chairman)},`,
+    "",
+    `Zostałeś/Zostałaś wyznaczony(a) na przewodniczącego komisji dla pomysłu o numerze ${idea.id}.`,
+    `Tytuł pomysłu: ${idea.title}`,
+    assignedBy ? `Osoba przypisująca: ${safeName(assignedBy)}` : "",
+    "",
+    "Zaloguj się do systemu, aby zobaczyć szczegóły komisji.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  await sendMailSafe({
+    to: chairman.email,
+    subject,
+    text,
+  });
+
+  if (idea.author_email) {
+    const authorSubject = `Dla pomysłu #${idea.id} wyznaczono przewodniczącego komisji`;
+    const authorText = [
+      `Cześć ${safeName({ name: idea.author_name, surname: idea.author_surname, email: idea.author_email })},`,
+      "",
+      `Dla Twojego pomysłu o numerze ${idea.id} („${idea.title}”) wyznaczono przewodniczącego komisji.`,
+      `Przewodniczący: ${safeName(chairman)}`,
+    ].join("\n");
+
+    await sendMailSafe({
+      to: idea.author_email,
+      subject: authorSubject,
+      text: authorText,
+    });
+  }
+};
+
+const notifyCommissionGoalDeadlineReminder = async ({
+  ideaId,
+  goalId,
+  goalTitle,
+  goalSteps,
+  dueDate,
+  recipients = [],
+  reminderType, 
+  daysLeft = null,
+}) => {
+  const idea = await getIdeaCore(ideaId);
+  if (!idea) return [];
+
+  const dueDateText = dueDate
+    ? new Date(dueDate).toLocaleDateString("pl-PL")
+    : "brak";
+
+  const reminderLine =
+    reminderType === "overdue"
+      ? "Termin realizacji tego kroku został przekroczony."
+      : `Do terminu realizacji pozostało ${daysLeft} ${
+          daysLeft === 1 ? "dzień" : "dni"
+        }.`;
+
+  return await sendBulkPersonalized(recipients, (u) => ({
+    to: u.email,
+    subject:
+      reminderType === "overdue"
+        ? `Przekroczony termin kroku (pomysł #${idea.id})`
+        : `Przypomnienie o terminie kroku (pomysł #${idea.id})`,
+    text: [
+      `Cześć ${safeName(u)},`,
+      "",
+      `Przypomnienie dotyczące pomysłu #${idea.id}.`,
+      `Tytuł pomysłu: ${idea.title}`,
+      `Krok (cel): ${goalTitle || `#${goalId}`}`,
+      goalSteps ? `Opis kroków: ${goalSteps}` : "",
+      `Termin (due_date): ${dueDateText}`,
+      reminderLine,
+      "",
+      "Zaloguj się do systemu, aby sprawdzić szczegóły i zaktualizować status kroku.",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  }));
+};
+
 module.exports = {
   notifySupervisorApproved,
   notifySupervisorRejected,
@@ -366,4 +462,6 @@ module.exports = {
   notifyCommissionMembersAdded,
   notifyIdeaResponsiblesAssigned,
   notifyIdeaCompleted,
+  notifyCommissionChairmanAssigned,
+  notifyCommissionGoalDeadlineReminder
 };

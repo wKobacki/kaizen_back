@@ -3,6 +3,9 @@ const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const path = require("path");
 
+const cron = require("node-cron");
+const { runCommissionGoalReminderJob } = require("./src/services/commissionGoalReminderJob");
+
 const corsOptions = require("./src/config/corsOptions");
 const { APP_PORT, API_ROUTE } = require("./config");
 
@@ -74,4 +77,9 @@ app.use((err, req, res, next) => {
 
 app.listen(APP_PORT, () => {
   console.log(`Server running on port ${APP_PORT}`);
+});
+
+cron.schedule("0 8 * * *", async () => {
+  console.log("[CRON] Running commission goal reminders...");
+  await runCommissionGoalReminderJob();
 });
