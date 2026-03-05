@@ -7,7 +7,7 @@ const verifyJWT = async (req, res, next) => {
     const authHeader = req?.headers?.authorization;
     if (!authHeader) return res.sendStatus(401);
 
-    const [scheme, token] = authHeader.split(" ");
+    const [scheme, token] = String(authHeader).split(" ");
     if (scheme !== "Bearer" || !token) return res.sendStatus(401);
 
     let decoded;
@@ -16,6 +16,8 @@ const verifyJWT = async (req, res, next) => {
     } catch (e) {
       return res.sendStatus(401);
     }
+
+    if (decoded?.type !== "access") return res.sendStatus(401);
 
     const userId = Number(decoded?.id);
     if (!Number.isInteger(userId)) return res.sendStatus(401);
@@ -49,7 +51,7 @@ const verifyJWT = async (req, res, next) => {
 
     req.token = decoded;
 
-    next();
+    return next();
   } catch (err) {
     console.error("verifyJWT ERROR:", err);
     return res.status(500).json({ message: "Internal server error" });

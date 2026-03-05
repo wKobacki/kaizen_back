@@ -1,34 +1,36 @@
+const jwt = require("jsonwebtoken");
 const sql = require("./db");
+const { REFRESH_TOKEN_SECRET } = require("../../config");
+const { refreshCookieOptions } = require("../services/authTokens"); 
 
 const handleLogout = async (req, res) => {
   try {
     const cookies = req.cookies;
 
-    if (!cookies?.jwt) return res.sendStatus(204);
-
-    const refreshToken = cookies.jwt;
-
-    const foundUser = await sql`
-      SELECT id
-      FROM users
-      WHERE refresh_token = ${refreshToken}
-      LIMIT 1
-    `;
-
-    if (foundUser.length > 0) {
-      await sql`
-        UPDATE users
-        SET refresh_token = NULL
-        WHERE refresh_token = ${refreshToken}
-      `;
+    if (!cookies?.jwt) {
+      res.clearCookie("jwt", refreshCookieOptions);
+      return res.sendStatus(204);
     }
 
-    res.clearCookie("jwt", {
-      httpOnly: true,
-      secure: false, // w prod: true (HTTPS)
-      sameSite: "lax",
-    });
+    const refreshToken = String(cookies.jwt);
 
+    try {
+      const decoded = jwt.verify(refreshToken, REFRESH_TOKEN_SECRET);
+
+      if (decoded?.type === "refresh" && Number.isInteger(Number(decoded?.id))) {
+        const userId = Number(decoded.id);
+
+        await sql`
+          UPDATE users
+          SET refresh_token_hash = NULL
+          WHERE id = ${userId}
+        `;
+      }
+    } catch (err) {
+      // token uszkodzony wiec zosawic puste, 
+    }
+
+    res.clearCookie("jwt", refreshCookieOptions);
     return res.sendStatus(204);
   } catch (err) {
     console.error("handleLogout ERROR:", err);

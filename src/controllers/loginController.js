@@ -1,7 +1,11 @@
 const bcrypt = require("bcrypt");
-const jwt = require("jsonwebtoken");
 const sql = require("./db");
-const { ACCESS_TOKEN_SECRET, REFRESH_TOKEN_SECRET } = require("../../config");
+const {
+  refreshCookieOptions,
+  signAccessToken,
+  signRefreshToken,
+  hashRefreshToken,
+} = require("../services/authTokens"); // <- dostosuj ścieżkę
 
 const handleLogin = async (req, res) => {
   try {
@@ -19,7 +23,7 @@ const handleLogin = async (req, res) => {
     }
 
     const foundUser = await sql`
-      SELECT 
+      SELECT
         id,
         email,
         password,
@@ -42,35 +46,19 @@ const handleLogin = async (req, res) => {
       return res.status(401).json({ message: "Invalid email or password" });
     }
 
-    const tokenPayload = {
-      id: user.id,
-      email: user.email,
-      role_id: user.role_id,
-      department_id: user.department_id,
-    };
-
-    const accessToken = jwt.sign(tokenPayload, ACCESS_TOKEN_SECRET, {
-      expiresIn: "15m",
-    });
-
-    const refreshToken = jwt.sign(tokenPayload, REFRESH_TOKEN_SECRET, {
-      expiresIn: "1d",
-    });
+    const accessToken = signAccessToken(user);
+    const refreshToken = signRefreshToken(user);
+    const refreshTokenHash = await hashRefreshToken(refreshToken);
 
     await sql`
       UPDATE users
       SET
-        refresh_token = ${refreshToken},
+        refresh_token_hash = ${refreshTokenHash},
         last_login = NOW()
       WHERE id = ${user.id}
     `;
 
-    res.cookie("jwt", refreshToken, {
-      httpOnly: true,
-      secure: false,
-      sameSite: "lax",
-      maxAge: 24 * 60 * 60 * 1000,
-    });
+    res.cookie("jwt", refreshToken, refreshCookieOptions);
 
     return res.json({
       uid: user.id,
@@ -84,7 +72,7 @@ const handleLogin = async (req, res) => {
 
     if (error.code === "42703") {
       return res.status(500).json({
-        message: "Missing database column (e.g. last_login). Run migration first.",
+        message: "Missing database column (e.g. last_login or refresh_token_hash). Run migration first.",
       });
     }
 
