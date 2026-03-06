@@ -27,7 +27,7 @@ const pickSafeBody = (req) => {
     "confirmPassword",
     "newPassword",
     "currentPassword",
-    "refresh_token",
+    "refresh_token_hash",
     "refreshToken",
     "accessToken",
     "token",

@@ -429,7 +429,7 @@ const forceLogoutUserAdmin = async (req, res) => {
 
     await sql`
       UPDATE users
-      SET refresh_token = NULL
+      SET refresh_token_hash = NULL
       WHERE id = ${userId}
     `;
 
@@ -532,7 +532,7 @@ const confirmPasswordReset = async (req, res) => {
         password = ${hashed},
         verification_code = NULL,
         verification_code_expires_at = NULL,
-        refresh_token = NULL
+        refresh_token_hash = NULL
       WHERE id = ${user.id}
     `;
 
