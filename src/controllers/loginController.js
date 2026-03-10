@@ -5,21 +5,21 @@ const {
   signAccessToken,
   signRefreshToken,
   hashRefreshToken,
-} = require("../services/authTokens"); // <- dostosuj ścieżkę
+} = require("../services/authTokens");
 
 const handleLogin = async (req, res) => {
   try {
     const { email: rawEmail, password: rawPassword } = req.body || {};
 
     if (rawEmail == null || rawPassword == null) {
-      return res.status(400).json({ message: "Email and password are required" });
+      return res.status(400).json({ message: "Email i hasło są wymagane" });
     }
 
     const email = String(rawEmail).trim().toLowerCase();
     const password = String(rawPassword);
 
     if (!email || !password) {
-      return res.status(400).json({ message: "Email and password are required" });
+      return res.status(400).json({ message: "Email i hasło są wymagane" });
     }
 
     const foundUser = await sql`
@@ -36,14 +36,14 @@ const handleLogin = async (req, res) => {
     `;
 
     if (foundUser.length === 0) {
-      return res.status(401).json({ message: "Invalid email or password" });
+      return res.status(401).json({ message: "Nieprawidłowy email lub hasło" });
     }
 
     const user = foundUser[0];
 
     const match = await bcrypt.compare(password, user.password);
     if (!match) {
-      return res.status(401).json({ message: "Invalid email or password" });
+      return res.status(401).json({ message: "Nieprawidłowy email lub hasło" });
     }
 
     const accessToken = signAccessToken(user);
@@ -72,7 +72,7 @@ const handleLogin = async (req, res) => {
 
     if (error.code === "42703") {
       return res.status(500).json({
-        message: "Missing database column (e.g. last_login or refresh_token_hash). Run migration first.",
+        message: "Missing database column. Run migration first.",
       });
     }
 
