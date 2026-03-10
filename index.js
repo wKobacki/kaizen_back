@@ -31,7 +31,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(cookieParser());
 
-app.use("/upload", express.static(path.join(__dirname, "upload")));
+app.use("/api/v1/upload", express.static(path.join(process.cwd(), "upload")));
 
 // request log (console)
 app.use((req, res, next) => {
