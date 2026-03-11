@@ -111,13 +111,23 @@ const updateUserBranch = async (req, res) => {
 
 const deleteUser = async (req, res) => {
     try {
-        const userId = req.params?.id;
-        if (!userId) return res.status(400).json({ message: 'User ID is required' });
+        const userId = Number(req.params?.id);
+        if (!Number.isInteger(userId)) {
+            return res.status(400).json({ message: 'User ID is required' });
+        }
 
         const existing = await sql`
             SELECT id FROM users WHERE id = ${userId}
         `;
-        if (existing.length === 0) return res.status(404).json({ message: 'User not found' });
+        if (existing.length === 0) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        await sql`
+            UPDATE departments
+            SET supervisor_user_id = NULL
+            WHERE supervisor_user_id = ${userId}
+        `;
 
         await sql`
             DELETE FROM ideas
@@ -131,7 +141,11 @@ const deleteUser = async (req, res) => {
 
         return res.json({ message: 'User deleted successfully' });
     } catch (error) {
-        return res.status(500).json({ message: 'Internal server error' });
+        console.error("DELETE USER ERROR:", error);
+        return res.status(500).json({
+            message: 'Internal server error',
+            error: error.message
+        });
     }
 };
 
