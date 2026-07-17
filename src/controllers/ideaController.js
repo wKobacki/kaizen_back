@@ -463,6 +463,23 @@ const assignDepartments = async (req, res) => {
       return res.status(400).json({ message: "No valid departments provided" });
     }
 
+
+    const [userRow] = await sql`
+      SELECT department_id
+      FROM users
+      WHERE id = ${userId}
+      LIMIT 1
+    `;
+    if (!userRow) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    const userDepartmentId = Number(userRow.department_id);
+    if (depIds.includes(userDepartmentId)) {
+      return res.status(400).json({
+        message: "You cannot assign your own department to the approval process"
+    });
+}
+
     await sql.begin(async (trx) => {
       for (const d of depIds) {
         await trx`
