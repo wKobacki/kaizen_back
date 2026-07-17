@@ -88,6 +88,16 @@ const handleNewUser = async (req, res) => {
       return res.status(400).json({ message: "invalid department_id" });
     }
 
+    let finalDepartmentId = depId;
+
+    if (depId == 13) {
+      if (locId == 3) {
+        finalDepartmentId = 4;
+      } else {
+        finalDepartmentId = 12;
+      }
+    }
+
     const loc = await sql`
       SELECT id
       FROM location
@@ -101,7 +111,7 @@ const handleNewUser = async (req, res) => {
     const dep = await sql`
       SELECT id, supervisor_user_id
       FROM departments
-      WHERE id = ${depId}
+      WHERE id = ${finalDepartmentId}
       LIMIT 1
     `;
     if (dep.length === 0) {
@@ -158,7 +168,7 @@ const handleNewUser = async (req, res) => {
         ${name},
         ${surname},
         ${locId},
-        ${depId},
+        ${finalDepartmentId},
         ${supervisorId},
         false,
         ${verificationCode},
