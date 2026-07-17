@@ -322,6 +322,7 @@ const getBranches = async (req, res) => {
         const rows = await sql`
             SELECT id, name 
             FROM departments
+            WHERE id NOT IN (4, 5, 12, 13, 14)
             ORDER BY name ASC
         `;
         return res.json({ result: rows });
