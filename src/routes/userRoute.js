@@ -15,6 +15,7 @@ router.post("/password-reset/confirm", userController.confirmPasswordReset);
 
 router.get("/managers", verifyJWT, requireVerified, userController.getManagers);
 router.get("/branches", userController.getBranches);
+router.get("/branchesSupervisor", userController.getBranchesSupervisorPanel);
 router.get("/locations", userController.getLocations);
 
 router.use(verifyJWT);

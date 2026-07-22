@@ -322,7 +322,20 @@ const getBranches = async (req, res) => {
         const rows = await sql`
             SELECT id, name 
             FROM departments
-            WHERE id NOT IN (4, 5, 12, 13, 14)
+            WHERE id NOT IN (4, 5, 12, 14)
+            ORDER BY name ASC
+        `;
+        return res.json({ result: rows });
+    } catch (err) {
+        return res.status(500).json({ message: "Failed to load branches list" });
+    }
+};
+
+const getBranchesSupervisorPanel = async (req, res) => {
+    try {
+        const rows = await sql`
+            SELECT id, name 
+            FROM departments
             ORDER BY name ASC
         `;
         return res.json({ result: rows });
@@ -599,6 +612,7 @@ module.exports = {
     updateCurrentUserPassword,
     getManagers,
     getBranches,
+    getBranchesSupervisorPanel,
     getLocations,
     updateUserAdmin,
     forceLogoutUserAdmin,
