@@ -334,7 +334,6 @@ const getBranches = async (req, res) => {
 const getBranchesSupervisorPanel = async (req, res) => {
   try {
     const departmentId = Number(req.user?.department_id);
-    console.log("Logged user:", req.user);
 
     if (!Number.isInteger(departmentId) || departmentId <= 0) {
       return res.status(400).json({
