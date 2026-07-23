@@ -332,16 +332,31 @@ const getBranches = async (req, res) => {
 };
 
 const getBranchesSupervisorPanel = async (req, res) => {
-    try {
-        const rows = await sql`
-            SELECT id, name 
-            FROM departments
-            ORDER BY name ASC
-        `;
-        return res.json({ result: rows });
-    } catch (err) {
-        return res.status(500).json({ message: "Failed to load branches list" });
+  try {
+    const departmentId = Number(req.user?.department_id);
+    console.log("Logged user:", req.user);
+
+    if (!Number.isInteger(departmentId) || departmentId <= 0) {
+      return res.status(400).json({
+        message: "Invalid department id",
+      });
     }
+
+    const rows = await sql`
+      SELECT id, name
+      FROM departments
+      WHERE id <> ${departmentId}
+      ORDER BY name ASC
+    `;
+
+    return res.json({ result: rows });
+  } catch (err) {
+    console.error("getBranchesSupervisorPanel ERROR:", err);
+
+    return res.status(500).json({
+      message: "Failed to load branches list",
+    });
+  }
 };
 
 const getLocations = async (req, res) => {

@@ -15,11 +15,12 @@ router.post("/password-reset/confirm", userController.confirmPasswordReset);
 
 router.get("/managers", verifyJWT, requireVerified, userController.getManagers);
 router.get("/branches", userController.getBranches);
-router.get("/branchesSupervisor", userController.getBranchesSupervisorPanel);
 router.get("/locations", userController.getLocations);
 
 router.use(verifyJWT);
 router.use(requireVerified);
+
+router.get("/branchesSupervisor", userController.getBranchesSupervisorPanel);
 
 router.get("/admin", verifyAdmin, userController.getUsers);
 router.get("/admin/:id", verifyAdmin, userController.getUserDetails);
