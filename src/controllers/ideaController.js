@@ -1,6 +1,7 @@
 const express = require('express');
 const sql = require('./db.js');
 const {
+  notifySupervisorNewIdea,
   notifySupervisorApproved,
   notifySupervisorRejected,
   notifyDepartmentsAssigned,
@@ -196,15 +197,23 @@ const createIdea = async (req, res) => {
     `;
 
     await sql`
-      INSERT INTO idea_workflow_log (idea_id, step, action, by_user, description)
-      VALUES (${inserted[0].id}, 'submitted', 'created', ${userId}, 'Idea submitted')
-    `;
+        INSERT INTO idea_workflow_log (idea_id, step, action, by_user, description)
+        VALUES (${inserted[0].id}, 'submitted', 'created', ${userId}, 'Idea submitted')
+      `;
 
-    return res.status(201).json({
-      message: "Idea created successfully",
-      id: inserted[0].id,
-      images: uploadedImages
-    });
+      try {
+        await notifySupervisorNewIdea({
+          ideaId: Number(inserted[0].id),
+        });
+      } catch (mailErr) {
+        console.error("notifySupervisorNewIdea ERROR:", mailErr);
+      }
+
+      return res.status(201).json({
+        message: "Idea created successfully",
+        id: inserted[0].id,
+        images: uploadedImages
+      });
   } catch (error) {
     console.error(error);
     return res.status(500).json({ message: "Internal server error" });
@@ -254,20 +263,36 @@ const getIdeaDetails = async (req, res) => {
       SELECT
         i.*,
         d.name AS department_name,
-        s.name  AS status_code,
-        s.name  AS status_name,
+        s.name AS status_code,
+        s.name AS status_name,
         cs.name AS current_step_code,
         cs.name AS current_step_name,
-        au.supervisor AS submitter_supervisor_id,
+
+        author_dept.supervisor_user_id AS submitter_supervisor_id,
         sup.name AS submitter_supervisor_name,
         sup.surname AS submitter_supervisor_surname,
         sup.email AS submitter_supervisor_email
+
       FROM ideas i
-      LEFT JOIN departments d ON d.id = i.department_id
-      LEFT JOIN status s ON s.id = i.status_id
-      LEFT JOIN status cs ON cs.id = i.current_step
-      LEFT JOIN users au ON au.id = i.user_id
-      LEFT JOIN users sup ON sup.id = au.supervisor
+
+      LEFT JOIN departments d
+        ON d.id = i.department_id
+
+      LEFT JOIN status s
+        ON s.id = i.status_id
+
+      LEFT JOIN status cs
+        ON cs.id = i.current_step
+
+      LEFT JOIN users au
+        ON au.id = i.user_id
+
+      LEFT JOIN departments author_dept
+        ON author_dept.id = au.department_id
+
+      LEFT JOIN users sup
+        ON sup.id = author_dept.supervisor_user_id
+
       WHERE i.id = ${ideaId}
       LIMIT 1
     `;
@@ -362,76 +387,341 @@ const getIdeaDetails = async (req, res) => {
 
 const supervisorApprove = async (req, res) => {
   try {
-    const id = req.params.id;
-    const userId = req.user.id;
+    const ideaId = Number(req.params.id);
+    const userId = Number(req.user?.id);
+    const roleId = Number(
+      req.user?.role_id ??
+      req.user?.roleId ??
+      null
+    );
 
-    const statusApproved = await sql`
-      SELECT id FROM status WHERE name = 'supervisor_approved'
-    `;
-    const stepDeptReview = await sql`
-      SELECT id FROM status WHERE name = 'department_review'
-    `;
-
-    await sql`
-      UPDATE ideas
-      SET status_id = ${statusApproved[0].id},
-          current_step = ${stepDeptReview[0].id}
-      WHERE id = ${id}
-    `;
-
-    await sql`
-      INSERT INTO idea_workflow_log (idea_id, step, action, by_user, description)
-      VALUES (${id}, 'supervisor_review', 'approved', ${userId}, 'Supervisor approved')
-    `;
-
-    try {
-      await notifySupervisorApproved({ ideaId: Number(id) });
-    } catch (mailErr) {
-      console.error("notifySupervisorApproved ERROR:", mailErr);
+    if (!Number.isInteger(ideaId) || ideaId <= 0) {
+      return res.status(400).json({
+        message: "Invalid idea id",
+      });
     }
 
-    return res.json({ message: "Supervisor approval saved" });
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return res.status(401).json({
+        message: "Unauthorized",
+      });
+    }
+
+    const [idea] = await sql`
+      SELECT
+        i.id,
+        i.user_id,
+        i.status_id,
+        i.current_step,
+
+        author.department_id AS author_department_id,
+
+        d.supervisor_user_id
+
+      FROM ideas i
+
+      JOIN users author
+        ON author.id = i.user_id
+
+      LEFT JOIN departments d
+        ON d.id = author.department_id
+
+      WHERE i.id = ${ideaId}
+      LIMIT 1
+    `;
+
+    if (!idea) {
+      return res.status(404).json({
+        message: "Idea not found",
+      });
+    }
+
+    const supervisorId = Number(idea.supervisor_user_id);
+
+    const isSupervisor =
+      Number.isInteger(supervisorId) &&
+      supervisorId === userId;
+
+    const isAdmin = roleId === 1;
+
+    if (!isSupervisor && !isAdmin) {
+      return res.status(403).json({
+        message: "You are not authorized to approve this idea",
+      });
+    }
+
+    const [submittedStatus] = await sql`
+      SELECT id
+      FROM status
+      WHERE name = 'submitted'
+      LIMIT 1
+    `;
+
+    const [approvedStatus] = await sql`
+      SELECT id
+      FROM status
+      WHERE name = 'supervisor_approved'
+      LIMIT 1
+    `;
+
+    const [departmentReviewStatus] = await sql`
+      SELECT id
+      FROM status
+      WHERE name = 'department_review'
+      LIMIT 1
+    `;
+
+    if (
+      !submittedStatus ||
+      !approvedStatus ||
+      !departmentReviewStatus
+    ) {
+      console.error(
+        "supervisorApprove ERROR: required status missing"
+      );
+
+      return res.status(500).json({
+        message: "Required workflow status is missing",
+      });
+    }
+
+    if (
+      Number(idea.current_step) !==
+      Number(submittedStatus.id)
+    ) {
+      return res.status(409).json({
+        message: "This idea is no longer awaiting supervisor approval",
+      });
+    }
+
+    const updated = await sql.begin(async (trx) => {
+      const rows = await trx`
+        UPDATE ideas
+        SET
+          status_id = ${approvedStatus.id},
+          current_step = ${departmentReviewStatus.id}
+        WHERE id = ${ideaId}
+          AND current_step = ${submittedStatus.id}
+        RETURNING id
+      `;
+
+      if (rows.length === 0) {
+        return false;
+      }
+
+      await trx`
+        INSERT INTO idea_workflow_log (
+          idea_id,
+          step,
+          action,
+          by_user,
+          description
+        )
+        VALUES (
+          ${ideaId},
+          'supervisor_review',
+          'approved',
+          ${userId},
+          'Supervisor approved'
+        )
+      `;
+
+      return true;
+    });
+
+    if (!updated) {
+      return res.status(409).json({
+        message: "Idea status has already changed",
+      });
+    }
+
+    try {
+      await notifySupervisorApproved({
+        ideaId,
+      });
+    } catch (mailErr) {
+      console.error(
+        "notifySupervisorApproved ERROR:",
+        mailErr
+      );
+    }
+
+    return res.json({
+      message: "Supervisor approval saved",
+    });
+
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: 'Internal server error' });
+    console.error("supervisorApprove ERROR:", error);
+
+    return res.status(500).json({
+      message: "Internal server error",
+    });
   }
 };
 
 const supervisorReject = async (req, res) => {
   try {
-    const id = req.params.id;
-    const { reason } = req.body;
-    const userId = req.user.id;
+    const ideaId = Number(req.params.id);
+    const userId = Number(req.user?.id);
+    const roleId = Number(
+      req.user?.role_id ??
+      req.user?.roleId ??
+      null
+    );
 
-    const statusRejected = await sql`
-      SELECT id FROM status WHERE name = 'supervisor_rejected'
+    const reason = String(req.body?.reason || "").trim();
+
+    if (!Number.isInteger(ideaId) || ideaId <= 0) {
+      return res.status(400).json({
+        message: "Invalid idea id",
+      });
+    }
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return res.status(401).json({
+        message: "Unauthorized",
+      });
+    }
+
+    const [idea] = await sql`
+      SELECT
+        i.id,
+        i.user_id,
+        i.status_id,
+        i.current_step,
+
+        author.department_id AS author_department_id,
+
+        d.supervisor_user_id
+
+      FROM ideas i
+
+      JOIN users author
+        ON author.id = i.user_id
+
+      LEFT JOIN departments d
+        ON d.id = author.department_id
+
+      WHERE i.id = ${ideaId}
+      LIMIT 1
     `;
 
-    await sql`
-      UPDATE ideas
-      SET status_id = ${statusRejected[0].id},
+    if (!idea) {
+      return res.status(404).json({
+        message: "Idea not found",
+      });
+    }
+
+    const supervisorId = Number(idea.supervisor_user_id);
+
+    const isSupervisor =
+      Number.isInteger(supervisorId) &&
+      supervisorId === userId;
+
+    const isAdmin = roleId === 1;
+
+    if (!isSupervisor && !isAdmin) {
+      return res.status(403).json({
+        message: "You are not authorized to reject this idea",
+      });
+    }
+
+    const [submittedStatus] = await sql`
+      SELECT id
+      FROM status
+      WHERE name = 'submitted'
+      LIMIT 1
+    `;
+
+    const [rejectedStatus] = await sql`
+      SELECT id
+      FROM status
+      WHERE name = 'supervisor_rejected'
+      LIMIT 1
+    `;
+
+    if (!submittedStatus || !rejectedStatus) {
+      console.error(
+        "supervisorReject ERROR: required status missing"
+      );
+
+      return res.status(500).json({
+        message: "Required workflow status is missing",
+      });
+    }
+
+    if (
+      Number(idea.current_step) !==
+      Number(submittedStatus.id)
+    ) {
+      return res.status(409).json({
+        message: "This idea is no longer awaiting supervisor decision",
+      });
+    }
+
+    const updated = await sql.begin(async (trx) => {
+      const rows = await trx`
+        UPDATE ideas
+        SET
+          status_id = ${rejectedStatus.id},
           current_step = NULL
-      WHERE id = ${id}
-    `;
+        WHERE id = ${ideaId}
+          AND current_step = ${submittedStatus.id}
+        RETURNING id
+      `;
 
-    await sql`
-      INSERT INTO idea_workflow_log (idea_id, step, action, by_user, description)
-      VALUES (${id}, 'supervisor_review', 'rejected', ${userId}, ${reason})
-    `;
+      if (rows.length === 0) {
+        return false;
+      }
+
+      await trx`
+        INSERT INTO idea_workflow_log (
+          idea_id,
+          step,
+          action,
+          by_user,
+          description
+        )
+        VALUES (
+          ${ideaId},
+          'supervisor_review',
+          'rejected',
+          ${userId},
+          ${reason}
+        )
+      `;
+
+      return true;
+    });
+
+    if (!updated) {
+      return res.status(409).json({
+        message: "Idea status has already changed",
+      });
+    }
 
     try {
       await notifySupervisorRejected({
-        ideaId: Number(id),
-        reason: reason || "",
+        ideaId,
+        reason,
       });
     } catch (mailErr) {
-      console.error("notifySupervisorRejected ERROR:", mailErr);
+      console.error(
+        "notifySupervisorRejected ERROR:",
+        mailErr
+      );
     }
 
-    return res.json({ message: "Idea rejected by supervisor" });
+    return res.json({
+      message: "Idea rejected by supervisor",
+    });
+
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: 'Internal server error' });
+    console.error("supervisorReject ERROR:", error);
+
+    return res.status(500).json({
+      message: "Internal server error",
+    });
   }
 };
 

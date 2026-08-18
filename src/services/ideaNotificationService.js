@@ -453,7 +453,102 @@ const notifyCommissionGoalDeadlineReminder = async ({
   }));
 };
 
+const notifySupervisorNewIdea = async ({ ideaId }) => {
+  const rows = await sql`
+    SELECT
+      i.id AS idea_id,
+      i.title AS idea_title,
+
+      author.id AS author_id,
+      author.name AS author_name,
+      author.surname AS author_surname,
+      author.email AS author_email,
+
+      d.id AS department_id,
+      d.name AS department_name,
+
+      supervisor.id AS supervisor_id,
+      supervisor.name AS supervisor_name,
+      supervisor.surname AS supervisor_surname,
+      supervisor.email AS supervisor_email
+
+    FROM ideas i
+
+    JOIN users author
+      ON author.id = i.user_id
+
+    LEFT JOIN departments d
+      ON d.id = author.department_id
+
+    LEFT JOIN users supervisor
+      ON supervisor.id = d.supervisor_user_id
+
+    WHERE i.id = ${ideaId}
+    LIMIT 1
+  `;
+
+  const data = rows?.[0];
+
+  if (!data) {
+    console.warn(
+      `[notifySupervisorNewIdea] Idea ${ideaId} not found`
+    );
+    return;
+  }
+
+  if (!data.supervisor_email) {
+    console.warn(
+      `[notifySupervisorNewIdea] No supervisor assigned for author department`,
+      {
+        ideaId,
+        authorId: data.author_id,
+        departmentId: data.department_id,
+      }
+    );
+    return;
+  }
+
+  const authorName =
+    `${data.author_name || ""} ${data.author_surname || ""}`.trim() ||
+    data.author_email;
+
+  const supervisorName =
+    `${data.supervisor_name || ""} ${data.supervisor_surname || ""}`.trim() ||
+    data.supervisor_email;
+
+  const subject = `Nowy pomysł do akceptacji (#${data.idea_id})`;
+
+  const text = [
+    `Cześć ${supervisorName},`,
+    "",
+    `${authorName} utworzył(a) nowy pomysł wymagający Twojej akceptacji.`,
+    "",
+    `Numer pomysłu: ${data.idea_id}`,
+    `Tytuł: ${data.idea_title}`,
+    "Zaloguj się do systemu, aby zapoznać się z pomysłem i podjąć decyzję.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const result = await sendMailSafe({
+    to: data.supervisor_email,
+    subject,
+    text,
+  });
+
+  if (result?.ok) {
+    console.log("[notifySupervisorNewIdea] Mail sent", {
+      ideaId: data.idea_id,
+      supervisorId: data.supervisor_id,
+      email: data.supervisor_email,
+    });
+  }
+
+  return result;
+};
+
 module.exports = {
+  notifySupervisorNewIdea,
   notifySupervisorApproved,
   notifySupervisorRejected,
   notifyDepartmentsAssigned,
