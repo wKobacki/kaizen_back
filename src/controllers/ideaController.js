@@ -1608,20 +1608,44 @@ const getIdeaWorkflow = async (req, res) => {
     const ideaId = req.params.id;
 
     const log = await sql`
-      SELECT 
+      SELECT
         l.*,
+
         u.name AS by_user_name,
-        u.surname AS by_user_surname
+        u.surname AS by_user_surname,
+
+        chairman.id AS chairman_user_id,
+        chairman.name AS chairman_name,
+        chairman.surname AS chairman_surname
+
       FROM idea_workflow_log l
-      LEFT JOIN users u ON u.id = l.by_user
+
+      LEFT JOIN users u
+        ON u.id = l.by_user
+
+      LEFT JOIN users chairman
+        ON l.step = 'commission'
+        AND l.action = 'chairman_set'
+        AND chairman.id = CASE
+          WHEN l.description ~ '^Chairman set to user #[0-9]+$'
+          THEN substring(l.description FROM '#([0-9]+)$')::integer
+          ELSE NULL
+        END
+
       WHERE l.idea_id = ${ideaId}
+
       ORDER BY l.created_at ASC
     `;
 
-    return res.status(200).json({ result: log });
+    return res.status(200).json({
+      result: log,
+    });
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: 'Internal server error' });
+    console.error("GET IDEA WORKFLOW ERROR:", error);
+
+    return res.status(500).json({
+      message: "Internal server error",
+    });
   }
 };
 
