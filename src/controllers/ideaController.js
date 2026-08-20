@@ -250,25 +250,39 @@ const getIdeaDetails = async (req, res) => {
     if (!Number.isInteger(ideaId)) {
       return res.status(400).json({ message: "Invalid idea id" });
     }
+
     if (!Number.isInteger(userId)) {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
     const roleName = norm(req.user?.role_name);
-    const roleId = Number(req.user?.role_id ?? req.user?.roleId ?? null);
-    const isAdmin = roleName === "admin" || roleId === 1;
-    const isSupervisorRole = roleName === "supervisor";
+    const roleId = Number(
+      req.user?.role_id ??
+      req.user?.roleId ??
+      null
+    );
+
+    const isAdmin =
+      roleName === "admin" ||
+      roleId === 1;
+
+    const isSupervisorRole =
+      roleName === "supervisor";
 
     const ideaRows = await sql`
       SELECT
         i.*,
+
         d.name AS department_name,
+
         s.name AS status_code,
         s.name AS status_name,
+
         cs.name AS current_step_code,
         cs.name AS current_step_name,
 
-        author_dept.supervisor_user_id AS submitter_supervisor_id,
+        au.supervisor AS submitter_supervisor_id,
+
         sup.name AS submitter_supervisor_name,
         sup.surname AS submitter_supervisor_surname,
         sup.email AS submitter_supervisor_email
@@ -287,101 +301,246 @@ const getIdeaDetails = async (req, res) => {
       LEFT JOIN users au
         ON au.id = i.user_id
 
-      LEFT JOIN departments author_dept
-        ON author_dept.id = au.department_id
-
       LEFT JOIN users sup
-        ON sup.id = author_dept.supervisor_user_id
+        ON sup.id = au.supervisor
 
       WHERE i.id = ${ideaId}
+
       LIMIT 1
     `;
 
     if (ideaRows.length === 0) {
-      return res.status(404).json({ message: "Idea not found" });
+      return res.status(404).json({
+        message: "Idea not found",
+      });
     }
 
     const idea = ideaRows[0];
 
     const ownerId = Number(idea.user_id);
-    const isOwner = Number.isInteger(ownerId) && ownerId === userId;
 
+    const isOwner =
+      Number.isInteger(ownerId) &&
+      ownerId === userId;
+
+    /*
+      Sprawdzenie członkostwa w komisji.
+    */
     const cm = await sql`
       SELECT 1
+
       FROM commissions c
-      JOIN commission_members cm ON cm.commission_id = c.id
+
+      JOIN commission_members cm
+        ON cm.commission_id = c.id
+
       WHERE c.idea_id = ${ideaId}
         AND cm.user_id = ${userId}
+
       LIMIT 1
     `;
-    const isCommissionMember = cm.length > 0;
 
-    const submitterSupervisorId = Number(idea.submitter_supervisor_id);
+    const isCommissionMember =
+      cm.length > 0;
+
+    /*
+      Pierwszy etap akceptacji.
+
+      UWAGA:
+      Tutaj korzystamy z users.supervisor autora,
+      a nie departments.supervisor_user_id.
+
+      Dzięki temu jeżeli kierownik sam zarządza swoim działem,
+      jego pomysł trafia do jego własnego przełożonego.
+    */
+    const submitterSupervisorId =
+      Number(idea.submitter_supervisor_id);
+
     const isIdeaSupervisor =
-      Number.isInteger(submitterSupervisorId) && submitterSupervisorId === userId;
+      Number.isInteger(submitterSupervisorId) &&
+      submitterSupervisorId === userId;
 
-    const canSeeAll = isAdmin || isOwner || isCommissionMember || isIdeaSupervisor;
+    /*
+      Działy przypisane do pomysłu, za które aktualnie
+      odpowiada zalogowany użytkownik.
 
+      Tutaj nadal prawidłowo korzystamy z:
+      departments.supervisor_user_id
+    */
+    const managedDepartmentRows = await sql`
+      SELECT DISTINCT
+        idp.department_id
+
+      FROM idea_departments idp
+
+      JOIN departments dept
+        ON dept.id = idp.department_id
+
+      WHERE idp.idea_id = ${ideaId}
+        AND dept.supervisor_user_id = ${userId}
+
+      ORDER BY idp.department_id
+    `;
+
+    const managedDepartmentIds =
+      managedDepartmentRows
+        .map((row) =>
+          Number(row.department_id)
+        )
+        .filter(Number.isInteger);
+
+    const isDepartmentReviewer =
+      managedDepartmentIds.length > 0;
+
+    const canReviewDepartments =
+      isAdmin ||
+      isDepartmentReviewer;
+
+    /*
+      Pełny dostęp do informacji o pomyśle.
+    */
+    const canSeeAll =
+      isAdmin ||
+      isOwner ||
+      isCommissionMember ||
+      isIdeaSupervisor;
+
+    /*
+      Historia workflow.
+    */
     const log = await sql`
       SELECT *
+
       FROM idea_workflow_log
+
       WHERE idea_id = ${ideaId}
+
       ORDER BY created_at ASC
     `;
 
     let departments = [];
 
+    /*
+      Administrator, właściciel pomysłu,
+      członek komisji oraz bezpośredni przełożony autora
+      widzą wszystkie działy przypisane do pomysłu.
+    */
     if (canSeeAll) {
       departments = await sql`
         SELECT
           idp.*,
+
           dept.name AS department_name,
-          s.name    AS status_code,
-          s.name    AS status_name
+
+          s.name AS status_code,
+          s.name AS status_name,
+
+          CASE
+            WHEN ${isAdmin} THEN TRUE
+
+            WHEN dept.supervisor_user_id = ${userId}
+              THEN TRUE
+
+            ELSE FALSE
+          END AS is_responsible
+
         FROM idea_departments idp
-        LEFT JOIN departments dept ON dept.id = idp.department_id
-        LEFT JOIN status s ON s.id = idp.status_id
+
+        LEFT JOIN departments dept
+          ON dept.id = idp.department_id
+
+        LEFT JOIN status s
+          ON s.id = idp.status_id
+
         WHERE idp.idea_id = ${ideaId}
+
         ORDER BY idp.id
       `;
     } else {
+      /*
+        Osoba odpowiedzialna za jeden lub kilka działów,
+        ale bez pełnego dostępu, widzi tylko swoje działy.
+      */
       departments = await sql`
         SELECT
           idp.*,
+
           dept.name AS department_name,
-          s.name    AS status_code,
-          s.name    AS status_name
+
+          s.name AS status_code,
+          s.name AS status_name,
+
+          TRUE AS is_responsible
+
         FROM idea_departments idp
-        JOIN departments dept ON dept.id = idp.department_id
-        LEFT JOIN status s ON s.id = idp.status_id
+
+        JOIN departments dept
+          ON dept.id = idp.department_id
+
+        LEFT JOIN status s
+          ON s.id = idp.status_id
+
         WHERE idp.idea_id = ${ideaId}
           AND dept.supervisor_user_id = ${userId}
+
         ORDER BY idp.id
       `;
     }
 
     return res.status(200).json({
       message: "Success",
+
       details: idea,
+
       log,
+
       departments,
+
       access: {
-        role_id: Number.isInteger(roleId) ? roleId : null,
+        role_id:
+          Number.isInteger(roleId)
+            ? roleId
+            : null,
+
         role_name: roleName,
+
         isAdmin,
         isSupervisorRole,
         isOwner,
         isCommissionMember,
+
+        /*
+          Bezpośredni przełożony autora,
+          wyznaczany przez users.supervisor.
+        */
         isIdeaSupervisor,
+
+        /*
+          Uprawnienia do akceptacji działowej.
+        */
+        isDepartmentReviewer,
+        canReviewDepartments,
+        managedDepartmentIds,
+
         canSeeAll,
-        submitterSupervisorId: Number.isInteger(submitterSupervisorId)
-          ? submitterSupervisorId
-          : null,
+
+        submitterSupervisorId:
+          Number.isInteger(
+            submitterSupervisorId
+          )
+            ? submitterSupervisorId
+            : null,
       },
     });
   } catch (error) {
-    console.error("getIdeaDetails ERROR:", error);
-    return res.status(500).json({ message: "Internal server error" });
+    console.error(
+      "getIdeaDetails ERROR:",
+      error
+    );
+
+    return res.status(500).json({
+      message: "Internal server error",
+    });
   }
 };
 
@@ -389,24 +548,38 @@ const supervisorApprove = async (req, res) => {
   try {
     const ideaId = Number(req.params.id);
     const userId = Number(req.user?.id);
+
     const roleId = Number(
       req.user?.role_id ??
       req.user?.roleId ??
       null
     );
 
-    if (!Number.isInteger(ideaId) || ideaId <= 0) {
+    if (
+      !Number.isInteger(ideaId) ||
+      ideaId <= 0
+    ) {
       return res.status(400).json({
         message: "Invalid idea id",
       });
     }
 
-    if (!Number.isInteger(userId) || userId <= 0) {
+    if (
+      !Number.isInteger(userId) ||
+      userId <= 0
+    ) {
       return res.status(401).json({
         message: "Unauthorized",
       });
     }
 
+    /*
+      Pobieramy bezpośredniego przełożonego autora
+      z users.supervisor.
+
+      Nie korzystamy tutaj z
+      departments.supervisor_user_id.
+    */
     const [idea] = await sql`
       SELECT
         i.id,
@@ -416,17 +589,15 @@ const supervisorApprove = async (req, res) => {
 
         author.department_id AS author_department_id,
 
-        d.supervisor_user_id
+        author.supervisor AS supervisor_user_id
 
       FROM ideas i
 
       JOIN users author
         ON author.id = i.user_id
 
-      LEFT JOIN departments d
-        ON d.id = author.department_id
-
       WHERE i.id = ${ideaId}
+
       LIMIT 1
     `;
 
@@ -436,40 +607,57 @@ const supervisorApprove = async (req, res) => {
       });
     }
 
-    const supervisorId = Number(idea.supervisor_user_id);
+    const supervisorId =
+      Number(idea.supervisor_user_id);
 
     const isSupervisor =
       Number.isInteger(supervisorId) &&
       supervisorId === userId;
 
-    const isAdmin = roleId === 1;
+    const isAdmin =
+      roleId === 1;
 
+    /*
+      Tylko bezpośredni przełożony autora
+      lub administrator może zaakceptować pomysł.
+    */
     if (!isSupervisor && !isAdmin) {
       return res.status(403).json({
-        message: "You are not authorized to approve this idea",
+        message:
+          "You are not authorized to approve this idea",
       });
     }
 
     const [submittedStatus] = await sql`
       SELECT id
+
       FROM status
+
       WHERE name = 'submitted'
+
       LIMIT 1
     `;
 
     const [approvedStatus] = await sql`
       SELECT id
+
       FROM status
+
       WHERE name = 'supervisor_approved'
+
       LIMIT 1
     `;
 
-    const [departmentReviewStatus] = await sql`
-      SELECT id
-      FROM status
-      WHERE name = 'department_review'
-      LIMIT 1
-    `;
+    const [departmentReviewStatus] =
+      await sql`
+        SELECT id
+
+        FROM status
+
+        WHERE name = 'department_review'
+
+        LIMIT 1
+      `;
 
     if (
       !submittedStatus ||
@@ -481,60 +669,75 @@ const supervisorApprove = async (req, res) => {
       );
 
       return res.status(500).json({
-        message: "Required workflow status is missing",
+        message:
+          "Required workflow status is missing",
       });
     }
 
+    /*
+      Pomysł musi nadal oczekiwać
+      na decyzję przełożonego.
+    */
     if (
       Number(idea.current_step) !==
       Number(submittedStatus.id)
     ) {
       return res.status(409).json({
-        message: "This idea is no longer awaiting supervisor approval",
+        message:
+          "This idea is no longer awaiting supervisor approval",
       });
     }
 
-    const updated = await sql.begin(async (trx) => {
-      const rows = await trx`
-        UPDATE ideas
-        SET
-          status_id = ${approvedStatus.id},
-          current_step = ${departmentReviewStatus.id}
-        WHERE id = ${ideaId}
-          AND current_step = ${submittedStatus.id}
-        RETURNING id
-      `;
+    const updated =
+      await sql.begin(async (trx) => {
+        const rows = await trx`
+          UPDATE ideas
 
-      if (rows.length === 0) {
-        return false;
-      }
+          SET
+            status_id = ${approvedStatus.id},
+            current_step = ${departmentReviewStatus.id}
 
-      await trx`
-        INSERT INTO idea_workflow_log (
-          idea_id,
-          step,
-          action,
-          by_user,
-          description
-        )
-        VALUES (
-          ${ideaId},
-          'supervisor_review',
-          'approved',
-          ${userId},
-          'Supervisor approved'
-        )
-      `;
+          WHERE id = ${ideaId}
+            AND current_step = ${submittedStatus.id}
 
-      return true;
-    });
+          RETURNING id
+        `;
+
+        if (rows.length === 0) {
+          return false;
+        }
+
+        await trx`
+          INSERT INTO idea_workflow_log (
+            idea_id,
+            step,
+            action,
+            by_user,
+            description
+          )
+
+          VALUES (
+            ${ideaId},
+            'supervisor_review',
+            'approved',
+            ${userId},
+            'Supervisor approved'
+          )
+        `;
+
+        return true;
+      });
 
     if (!updated) {
       return res.status(409).json({
-        message: "Idea status has already changed",
+        message:
+          "Idea status has already changed",
       });
     }
 
+    /*
+      Powiadomienie autora.
+    */
     try {
       await notifySupervisorApproved({
         ideaId,
@@ -547,11 +750,14 @@ const supervisorApprove = async (req, res) => {
     }
 
     return res.json({
-      message: "Supervisor approval saved",
+      message:
+        "Supervisor approval saved",
     });
-
   } catch (error) {
-    console.error("supervisorApprove ERROR:", error);
+    console.error(
+      "supervisorApprove ERROR:",
+      error
+    );
 
     return res.status(500).json({
       message: "Internal server error",
@@ -563,26 +769,49 @@ const supervisorReject = async (req, res) => {
   try {
     const ideaId = Number(req.params.id);
     const userId = Number(req.user?.id);
+
     const roleId = Number(
       req.user?.role_id ??
       req.user?.roleId ??
       null
     );
 
-    const reason = String(req.body?.reason || "").trim();
+    const reason = String(
+      req.body?.reason || ""
+    ).trim();
 
-    if (!Number.isInteger(ideaId) || ideaId <= 0) {
+    if (
+      !Number.isInteger(ideaId) ||
+      ideaId <= 0
+    ) {
       return res.status(400).json({
         message: "Invalid idea id",
       });
     }
 
-    if (!Number.isInteger(userId) || userId <= 0) {
+    if (
+      !Number.isInteger(userId) ||
+      userId <= 0
+    ) {
       return res.status(401).json({
         message: "Unauthorized",
       });
     }
 
+    /*
+      Walidacja powodu odrzucenia.
+    */
+    if (reason.length < 3) {
+      return res.status(400).json({
+        message:
+          "Rejection reason must contain at least 3 characters",
+      });
+    }
+
+    /*
+      Bezpośredni przełożony autora
+      pochodzi z users.supervisor.
+    */
     const [idea] = await sql`
       SELECT
         i.id,
@@ -592,17 +821,15 @@ const supervisorReject = async (req, res) => {
 
         author.department_id AS author_department_id,
 
-        d.supervisor_user_id
+        author.supervisor AS supervisor_user_id
 
       FROM ideas i
 
       JOIN users author
         ON author.id = i.user_id
 
-      LEFT JOIN departments d
-        ON d.id = author.department_id
-
       WHERE i.id = ${ideaId}
+
       LIMIT 1
     `;
 
@@ -612,94 +839,125 @@ const supervisorReject = async (req, res) => {
       });
     }
 
-    const supervisorId = Number(idea.supervisor_user_id);
+    const supervisorId =
+      Number(idea.supervisor_user_id);
 
     const isSupervisor =
       Number.isInteger(supervisorId) &&
       supervisorId === userId;
 
-    const isAdmin = roleId === 1;
+    const isAdmin =
+      roleId === 1;
 
+    /*
+      Tylko bezpośredni przełożony autora
+      lub administrator może odrzucić pomysł.
+    */
     if (!isSupervisor && !isAdmin) {
       return res.status(403).json({
-        message: "You are not authorized to reject this idea",
+        message:
+          "You are not authorized to reject this idea",
       });
     }
 
     const [submittedStatus] = await sql`
       SELECT id
+
       FROM status
+
       WHERE name = 'submitted'
+
       LIMIT 1
     `;
 
     const [rejectedStatus] = await sql`
       SELECT id
+
       FROM status
+
       WHERE name = 'supervisor_rejected'
+
       LIMIT 1
     `;
 
-    if (!submittedStatus || !rejectedStatus) {
+    if (
+      !submittedStatus ||
+      !rejectedStatus
+    ) {
       console.error(
         "supervisorReject ERROR: required status missing"
       );
 
       return res.status(500).json({
-        message: "Required workflow status is missing",
+        message:
+          "Required workflow status is missing",
       });
     }
 
+    /*
+      Pomysł musi nadal znajdować się
+      na etapie akceptacji przełożonego.
+    */
     if (
       Number(idea.current_step) !==
       Number(submittedStatus.id)
     ) {
       return res.status(409).json({
-        message: "This idea is no longer awaiting supervisor decision",
+        message:
+          "This idea is no longer awaiting supervisor decision",
       });
     }
 
-    const updated = await sql.begin(async (trx) => {
-      const rows = await trx`
-        UPDATE ideas
-        SET
-          status_id = ${rejectedStatus.id},
-          current_step = NULL
-        WHERE id = ${ideaId}
-          AND current_step = ${submittedStatus.id}
-        RETURNING id
-      `;
+    const updated =
+      await sql.begin(async (trx) => {
+        const rows = await trx`
+          UPDATE ideas
 
-      if (rows.length === 0) {
-        return false;
-      }
+          SET
+            status_id = ${rejectedStatus.id},
+            current_step = NULL
 
-      await trx`
-        INSERT INTO idea_workflow_log (
-          idea_id,
-          step,
-          action,
-          by_user,
-          description
-        )
-        VALUES (
-          ${ideaId},
-          'supervisor_review',
-          'rejected',
-          ${userId},
-          ${reason}
-        )
-      `;
+          WHERE id = ${ideaId}
+            AND current_step = ${submittedStatus.id}
 
-      return true;
-    });
+          RETURNING id
+        `;
+
+        if (rows.length === 0) {
+          return false;
+        }
+
+        await trx`
+          INSERT INTO idea_workflow_log (
+            idea_id,
+            step,
+            action,
+            by_user,
+            description
+          )
+
+          VALUES (
+            ${ideaId},
+            'supervisor_review',
+            'rejected',
+            ${userId},
+            ${reason}
+          )
+        `;
+
+        return true;
+      });
 
     if (!updated) {
       return res.status(409).json({
-        message: "Idea status has already changed",
+        message:
+          "Idea status has already changed",
       });
     }
 
+    /*
+      Powiadomienie autora.
+    */
     try {
       await notifySupervisorRejected({
         ideaId,
@@ -713,11 +971,14 @@ const supervisorReject = async (req, res) => {
     }
 
     return res.json({
-      message: "Idea rejected by supervisor",
+      message:
+        "Idea rejected by supervisor",
     });
-
   } catch (error) {
-    console.error("supervisorReject ERROR:", error);
+    console.error(
+      "supervisorReject ERROR:",
+      error
+    );
 
     return res.status(500).json({
       message: "Internal server error",
@@ -819,127 +1080,378 @@ const assignDepartments = async (req, res) => {
 const departmentDecision = async (req, res) => {
   try {
     const ideaId = Number(req.params.id);
-    const { department_id, action, reason } = req.body;
-    const userId = req.user.id;
+    const departmentId = Number(req.body?.department_id);
+    const action = String(req.body?.action || "")
+      .trim()
+      .toLowerCase();
 
-    if (!Number.isInteger(ideaId) || !Number.isInteger(Number(department_id))) {
-      return res.status(400).json({ message: "Invalid ids" });
+    const reason = String(req.body?.reason || "").trim();
+
+    const userId = Number(req.user?.id);
+
+    const roleId = Number(
+      req.user?.role_id ??
+      req.user?.roleId ??
+      null
+    );
+
+    const roleName = norm(req.user?.role_name);
+
+    const isAdmin =
+      roleId === 1 ||
+      roleName === "admin";
+
+    if (!Number.isInteger(ideaId) || ideaId <= 0) {
+      return res.status(400).json({
+        message: "Invalid idea id",
+      });
+    }
+
+    if (!Number.isInteger(departmentId) || departmentId <= 0) {
+      return res.status(400).json({
+        message: "Invalid department id",
+      });
+    }
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return res.status(401).json({
+        message: "Unauthorized",
+      });
     }
 
     if (action !== "approve" && action !== "reject") {
-      return res.status(400).json({ message: "action must be approve or reject" });
+      return res.status(400).json({
+        message: "action must be approve or reject",
+      });
     }
 
-    let responsePayload = { message: "Decision saved" };
+    if (action === "reject" && reason.length < 3) {
+      return res.status(400).json({
+        message: "Rejection reason must contain at least 3 characters",
+      });
+    }
+
+    let responsePayload = {
+      message: "Decision saved",
+    };
+
     let shouldNotifyCommissionAutoCreated = false;
     let autoCommissionSupervisorIds = [];
 
-    await sql.begin(async (trx) => {
-      const statusApprovedId = await getStatusId(trx, "department_approved");
-      const statusRejectedId = await getStatusId(trx, "department_rejected");
-      const statusReviewId = await getStatusId(trx, "department_review");
-      const statusCommissionCreatedId = await getStatusId(trx, "commission_created");
+    const transactionResult = await sql.begin(async (trx) => {
+      const statusApprovedId = await getStatusId(
+        trx,
+        "department_approved"
+      );
 
-      if (action === "approve") {
-        await trx`
-          UPDATE idea_departments
-          SET status_id = ${statusApprovedId},
-              decided_by = ${userId},
-              decided_at = NOW(),
-              reject_reason = NULL
-          WHERE idea_id = ${ideaId} AND department_id = ${Number(department_id)}
-        `;
-      } else {
-        await trx`
-          UPDATE idea_departments
-          SET status_id = ${statusRejectedId},
-              reject_reason = ${reason || ""},
-              decided_by = ${userId},
-              decided_at = NOW()
-          WHERE idea_id = ${ideaId} AND department_id = ${Number(department_id)}
-        `;
+      const statusRejectedId = await getStatusId(
+        trx,
+        "department_rejected"
+      );
+
+      const statusReviewId = await getStatusId(
+        trx,
+        "department_review"
+      );
+
+      const statusCommissionCreatedId = await getStatusId(
+        trx,
+        "commission_created"
+      );
+
+      const targetRows = await trx`
+        SELECT
+          idp.id,
+          idp.status_id,
+          idp.department_id,
+          dept.name AS department_name,
+          dept.supervisor_user_id,
+          i.current_step
+
+        FROM idea_departments idp
+
+        JOIN departments dept
+          ON dept.id = idp.department_id
+
+        JOIN ideas i
+          ON i.id = idp.idea_id
+
+        WHERE idp.idea_id = ${ideaId}
+          AND idp.department_id = ${departmentId}
+
+        LIMIT 1
+
+        FOR UPDATE OF idp, i
+      `;
+
+      const target = targetRows?.[0];
+
+      if (!target) {
+        return {
+          error: {
+            status: 404,
+            message: "Department is not assigned to this idea",
+          },
+        };
       }
 
+      const supervisorId = Number(
+        target.supervisor_user_id
+      );
+
+      const isDepartmentSupervisor =
+        Number.isInteger(supervisorId) &&
+        supervisorId === userId;
+
+      if (!isAdmin && !isDepartmentSupervisor) {
+        return {
+          error: {
+            status: 403,
+            message:
+              "You are not authorized to decide for this department",
+          },
+        };
+      }
+
+      if (
+        Number(target.current_step) !==
+        Number(statusReviewId)
+      ) {
+        return {
+          error: {
+            status: 409,
+            message:
+              "Department review is no longer active for this idea",
+          },
+        };
+      }
+
+      if (
+        Number(target.status_id) !==
+        Number(statusReviewId)
+      ) {
+        return {
+          error: {
+            status: 409,
+            message:
+              "A decision has already been saved for this department",
+          },
+        };
+      }
+
+      const nextDepartmentStatusId =
+        action === "approve"
+          ? statusApprovedId
+          : statusRejectedId;
+
+      const updatedRows = await trx`
+        UPDATE idea_departments
+
+        SET
+          status_id = ${nextDepartmentStatusId},
+          decided_by = ${userId},
+          decided_at = NOW(),
+          reject_reason = ${
+            action === "reject"
+              ? reason
+              : null
+          }
+
+        WHERE idea_id = ${ideaId}
+          AND department_id = ${departmentId}
+          AND status_id = ${statusReviewId}
+
+        RETURNING id
+      `;
+
+      if (updatedRows.length === 0) {
+        return {
+          error: {
+            status: 409,
+            message:
+              "Department decision has already changed",
+          },
+        };
+      }
+
+      const logDescription =
+        action === "reject"
+          ? `${
+              target.department_name ||
+              `Department #${departmentId}`
+            } rejected: ${reason}`
+          : `${
+              target.department_name ||
+              `Department #${departmentId}`
+            } approved`;
+
       await trx`
-        INSERT INTO idea_workflow_log (idea_id, step, action, by_user, description)
-        VALUES (${ideaId}, 'department_review', ${action}, ${userId}, ${reason || ''})
+        INSERT INTO idea_workflow_log (
+          idea_id,
+          step,
+          action,
+          by_user,
+          description
+        )
+        VALUES (
+          ${ideaId},
+          'department_review',
+          ${action},
+          ${userId},
+          ${logDescription}
+        )
       `;
 
       const deptRows = await trx`
-        SELECT department_id, status_id
+        SELECT
+          department_id,
+          status_id
         FROM idea_departments
         WHERE idea_id = ${ideaId}
       `;
 
-      const anyRejected = deptRows.some((r) => r.status_id === statusRejectedId);
-      const allApproved = deptRows.length > 0 && deptRows.every((r) => r.status_id === statusApprovedId);
+      const anyRejected = deptRows.some(
+        (row) =>
+          Number(row.status_id) ===
+          Number(statusRejectedId)
+      );
+
+      const allApproved =
+        deptRows.length > 0 &&
+        deptRows.every(
+          (row) =>
+            Number(row.status_id) ===
+            Number(statusApprovedId)
+        );
 
       if (anyRejected) {
         await trx`
           UPDATE ideas
-          SET status_id = ${statusRejectedId},
-              current_step = ${statusRejectedId}
+
+          SET
+            status_id = ${statusRejectedId},
+            current_step = ${statusRejectedId}
+
           WHERE id = ${ideaId}
         `;
       } else if (allApproved) {
-        const { commissionId, addedCount, supervisorIds } = await ensureCommissionWithDeptSupervisors(trx, ideaId, userId);
+        const {
+          commissionId,
+          addedCount,
+          supervisorIds,
+        } = await ensureCommissionWithDeptSupervisors(
+          trx,
+          ideaId,
+          userId
+        );
+
         shouldNotifyCommissionAutoCreated = true;
-        autoCommissionSupervisorIds = Array.isArray(supervisorIds) ? supervisorIds : [];
+
+        autoCommissionSupervisorIds =
+          Array.isArray(supervisorIds)
+            ? supervisorIds
+            : [];
 
         await trx`
           UPDATE ideas
-          SET status_id = ${statusCommissionCreatedId},
-              current_step = ${statusCommissionCreatedId}
+
+          SET
+            status_id = ${statusCommissionCreatedId},
+            current_step = ${statusCommissionCreatedId}
+
           WHERE id = ${ideaId}
         `;
 
         await trx`
-          INSERT INTO idea_workflow_log (idea_id, step, action, by_user, description)
-          VALUES (${ideaId}, 'commission', 'auto_created', ${userId},
-                  ${`Commission auto-created. Added supervisors: ${addedCount}`})
+          INSERT INTO idea_workflow_log (
+            idea_id,
+            step,
+            action,
+            by_user,
+            description
+          )
+          VALUES (
+            ${ideaId},
+            'commission',
+            'auto_created',
+            ${userId},
+            ${`Commission auto-created. Added supervisors: ${addedCount}`}
+          )
         `;
 
         responsePayload = {
-          message: "All departments approved. Commission auto-created.",
-          commissionId
+          message:
+            "All departments approved. Commission auto-created.",
+          commissionId,
         };
       } else {
         await trx`
           UPDATE ideas
-          SET status_id = ${statusReviewId},
-              current_step = ${statusReviewId}
+
+          SET
+            status_id = ${statusReviewId},
+            current_step = ${statusReviewId}
+
           WHERE id = ${ideaId}
         `;
       }
+
+      return {
+        ok: true,
+      };
     });
+
+    if (transactionResult?.error) {
+      return res
+        .status(transactionResult.error.status)
+        .json({
+          message: transactionResult.error.message,
+        });
+    }
 
     try {
       await notifyDepartmentDecision({
         ideaId,
-        departmentId: Number(department_id),
+        departmentId,
         action,
-        reason: reason || "",
+        reason:
+          action === "reject"
+            ? reason
+            : "",
       });
     } catch (mailErr) {
-      console.error("notifyDepartmentDecision ERROR:", mailErr);
+      console.error(
+        "notifyDepartmentDecision ERROR:",
+        mailErr
+      );
     }
 
     if (shouldNotifyCommissionAutoCreated) {
       try {
         await notifyCommissionCreated({
           ideaId,
-          memberIds: autoCommissionSupervisorIds,
+          memberIds:
+            autoCommissionSupervisorIds,
           source: "auto",
         });
       } catch (mailErr) {
-        console.error("notifyCommissionCreated(auto) ERROR:", mailErr);
+        console.error(
+          "notifyCommissionCreated(auto) ERROR:",
+          mailErr
+        );
       }
     }
 
     return res.json(responsePayload);
   } catch (error) {
-    console.error("departmentDecision ERROR:", error);
-    return res.status(500).json({ message: "Internal server error" });
+    console.error(
+      "departmentDecision ERROR:",
+      error
+    );
+
+    return res.status(500).json({
+      message: "Internal server error",
+    });
   }
 };
 
@@ -1115,14 +1627,62 @@ const getIdeaWorkflow = async (req, res) => {
 
 const getIdeaDepartmentsShort = async (req, res) => {
   try {
-    const ideaId = req.params.id;
+    const ideaId = Number(req.params.id);
+    const userId = Number(req.user?.id);
 
-    if (!ideaId) {
-      return res.status(400).json({ message: "ideaId is required" });
+    const roleId = Number(
+      req.user?.role_id ??
+      req.user?.roleId ??
+      null
+    );
+
+    const roleName = norm(req.user?.role_name);
+
+    const isAdmin =
+      roleId === 1 ||
+      roleName === "admin";
+
+    if (!Number.isInteger(ideaId) || ideaId <= 0) {
+      return res.status(400).json({
+        message: "Invalid idea id",
+      });
     }
 
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return res.status(401).json({
+        message: "Unauthorized",
+      });
+    }
+
+    const ideaRows = await sql`
+      SELECT
+        i.id,
+        current_status.name AS current_step_name
+
+      FROM ideas i
+
+      LEFT JOIN status current_status
+        ON current_status.id = i.current_step
+
+      WHERE i.id = ${ideaId}
+
+      LIMIT 1
+    `;
+
+    const idea = ideaRows?.[0];
+
+    if (!idea) {
+      return res.status(404).json({
+        message: "Idea not found",
+      });
+    }
+
+    const workflowOpen =
+      norm(idea.current_step_name) ===
+      "department_review";
+
     const depts = await sql`
-      SELECT 
+      SELECT
         d.id,
         d.department_id,
         dept.name AS department_name,
@@ -1132,19 +1692,78 @@ const getIdeaDepartmentsShort = async (req, res) => {
         u.name AS decided_by_name,
         u.surname AS decided_by_surname,
         d.decided_at,
-        d.reject_reason
+        d.reject_reason,
+
+        CASE
+          WHEN ${isAdmin} THEN TRUE
+          WHEN dept.supervisor_user_id = ${userId} THEN TRUE
+          ELSE FALSE
+        END AS is_responsible,
+
+        CASE
+          WHEN ${workflowOpen} = FALSE THEN FALSE
+          WHEN s.name <> 'department_review' THEN FALSE
+          WHEN ${isAdmin} THEN TRUE
+          WHEN dept.supervisor_user_id = ${userId} THEN TRUE
+          ELSE FALSE
+        END AS can_decide
+
       FROM idea_departments d
-      LEFT JOIN departments dept ON dept.id = d.department_id
-      LEFT JOIN status s ON s.id = d.status_id
-      LEFT JOIN users u ON u.id = d.decided_by
+
+      LEFT JOIN departments dept
+        ON dept.id = d.department_id
+
+      LEFT JOIN status s
+        ON s.id = d.status_id
+
+      LEFT JOIN users u
+        ON u.id = d.decided_by
+
       WHERE d.idea_id = ${ideaId}
+
       ORDER BY dept.name ASC
     `;
 
-    return res.status(200).json({ result: depts });
+    const reviewableDepartmentIds = depts
+      .filter(
+        (dept) =>
+          dept.can_decide === true
+      )
+      .map(
+        (dept) =>
+          Number(dept.department_id)
+      )
+      .filter(Number.isInteger);
+
+    const responsibleDepartmentIds = depts
+      .filter(
+        (dept) =>
+          dept.is_responsible === true
+      )
+      .map(
+        (dept) =>
+          Number(dept.department_id)
+      )
+      .filter(Number.isInteger);
+
+    return res.status(200).json({
+      result: depts,
+      access: {
+        isAdmin,
+        workflowOpen,
+        responsibleDepartmentIds,
+        reviewableDepartmentIds,
+      },
+    });
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: "Internal server error" });
+    console.error(
+      "getIdeaDepartmentsShort ERROR:",
+      error
+    );
+
+    return res.status(500).json({
+      message: "Internal server error",
+    });
   }
 };
 
