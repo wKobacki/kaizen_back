@@ -28,6 +28,11 @@ router.post("/:id/commission", controller.createCommission);
 router.get("/:id/commission/check", controller.checkCommissionExists);
 
 router.get(
+"/improvement-categories",
+controller.getImprovementCategories
+);
+
+router.get(
   "/:id/commission/members",
   requireCommissionAccess({ allowOwner: true, mode: "read" }),
   controller.getCommissionMembers

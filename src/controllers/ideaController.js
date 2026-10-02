@@ -1518,6 +1518,7 @@ const completeIdea = async (req, res) => {
     const ideaId = Number(req.params.id);
     const userId = Number(req.user?.id);
     const userRoleId = Number(req.user?.role_id);
+    const { improvement_category_id } = req.body;
 
     if (!Number.isInteger(ideaId)) {
       return res.status(400).json({ message: "Invalid idea id" });
@@ -1525,6 +1526,11 @@ const completeIdea = async (req, res) => {
 
     if (!Number.isInteger(userId)) {
       return res.status(401).json({ message: "Unauthorized" });
+    }
+    if (!Number.isInteger(Number(improvement_category_id))) {
+      return res.status(400).json({
+      message: "Invalid improvement category",
+    });
     }
 
     const ideaRows = await sql`
@@ -1571,7 +1577,8 @@ const completeIdea = async (req, res) => {
         UPDATE ideas
         SET
           status_id = ${completedStatusId},
-          current_step = ${completedStatusId}
+          current_step = ${completedStatusId},
+          improvement_category_id = ${improvement_category_id}
         WHERE id = ${ideaId}
       `;
 
@@ -1582,7 +1589,9 @@ const completeIdea = async (req, res) => {
           'final',
           'completed',
           ${userId},
-          ${isChairman ? 'Idea implemented successfully (completed by commission chairman)' : 'Idea implemented successfully'}
+          ${isChairman
+            ? `Idea implemented successfully (completed by commission chairman). Category: ${improvement_category_id}`
+            : `Idea implemented successfully. Category: ${improvement_category_id}`}
         )
       `;
     });
@@ -2484,6 +2493,28 @@ const setCommissionChairman = async (req, res) => {
   }
 };
 
+const getImprovementCategories = async (req, res) => {
+  try {
+    const categories = await sql`
+      SELECT
+        id,
+        code,
+        name,
+        description
+      FROM improvement_categories
+      ORDER BY id
+    `;
+
+    return res.json(categories);
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      message: "Internal server error",
+    });
+  }
+};
+
 module.exports = {
   createIdea,
   getAllIdeas,
@@ -2509,4 +2540,5 @@ module.exports = {
   resolveUsersByIds,
   getCommissionChairman,
   setCommissionChairman,
+  getImprovementCategories,
 };
