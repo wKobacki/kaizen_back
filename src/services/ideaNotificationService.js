@@ -573,7 +573,7 @@ const notifyIdeaCompleted = async ({ ideaId }) => {
       email: idea.author_email,
     })},`,
     "",
-    `Twój pomysł o numerze ${idea.id} („${idea.title}”) został oznaczony jako zrealizowany/zakończony.`,
+    `Twój pomysł o numerze ${idea.id} („${idea.title}”) został zakończony.`,
   ].join("\n");
   await sendMailSafe({
     to: idea.author_email,
