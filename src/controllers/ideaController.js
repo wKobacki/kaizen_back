@@ -38,7 +38,6 @@ const ensureCommissionWithDeptSupervisors = async (trx, ideaId, createdBy) => {
     ON CONFLICT (idea_id) DO NOTHING
     RETURNING id
   `;
-
   let commissionId = inserted?.[0]?.id;
 
   if (!commissionId) {
@@ -47,36 +46,37 @@ const ensureCommissionWithDeptSupervisors = async (trx, ideaId, createdBy) => {
     `;
     commissionId = existing?.id;
   }
-
   if (!commissionId) {
     throw new Error("Cannot resolve commissionId");
   }
 
   const approvedId = await getStatusId(trx, "department_approved");
-
   const rows = await trx`
-    SELECT DISTINCT d.supervisor_user_id AS user_id
+    SELECT d.supervisor_user_id AS user_id
     FROM idea_departments idp
     JOIN departments d ON d.id = idp.department_id
     WHERE idp.idea_id = ${ideaId}
       AND idp.status_id = ${approvedId}
       AND d.supervisor_user_id IS NOT NULL
+    UNION
+    SELECT author.supervisor AS user_id
+    FROM ideas i
+    JOIN users author ON author.id = i.user_id
+    WHERE i.id = ${ideaId}
+      AND author.supervisor IS NOT NULL
   `;
 
   const supervisorIds = uniqInt(rows.map((r) => r.user_id));
-
   let addedCount = 0;
 
   if (supervisorIds.length > 0) {
     const values = supervisorIds.map((uid) => [commissionId, uid]);
-
     const insertedMembers = await trx`
       INSERT INTO commission_members (commission_id, user_id)
       VALUES ${trx(values)}
       ON CONFLICT (commission_id, user_id) DO NOTHING
       RETURNING id
     `;
-
     addedCount = insertedMembers?.length ?? 0;
   }
 
@@ -991,13 +991,23 @@ const assignDepartments = async (req, res) => {
   try {
     const ideaId = Number(req.params.id);
     const { departments } = req.body;
-    const userId = req.user.id;
+    const userId = req.user?.id;
 
-    if (!Number.isInteger(ideaId)) {
+    if (!Number.isInteger(ideaId) || ideaId <= 0) {
       return res.status(400).json({ message: "Invalid idea id" });
+    }
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
     }
     if (!Array.isArray(departments)) {
       return res.status(400).json({ message: "Invalid departments format" });
+    }
+
+    const depIds = [...new Set(
+      departments.map(Number).filter((id) => Number.isInteger(id) && id > 0)
+    )];
+    if (depIds.length === 0) {
+      return res.status(400).json({ message: "No valid departments provided" });
     }
 
     const [pending] = await sql`
@@ -1007,48 +1017,14 @@ const assignDepartments = async (req, res) => {
       return res.status(500).json({ message: "Missing status: department_review" });
     }
 
-    const depIds = [...new Set(departments)]
-      .map(Number)
-      .filter((x) => Number.isInteger(x));
-
-    if (depIds.length === 0) {
-      return res.status(400).json({ message: "No valid departments provided" });
-    }
-
-    const [userRow] = await sql`
-      SELECT department_id
-      FROM users
-      WHERE id = ${userId}
-      LIMIT 1
-    `;
-    if (!userRow) {
-      return res.status(404).json({ message: "User not found" });
-    }
-    const userDepartmentId = Number(userRow.department_id);
-    if (depIds.includes(userDepartmentId)) {
-      return res.status(400).json({
-        message: "You cannot assign your own department to the approval process"
-    });
-}
-
     await sql.begin(async (trx) => {
-      for (const d of depIds) {
+      for (const departmentId of depIds) {
         await trx`
           INSERT INTO idea_departments (
-            idea_id,
-            department_id,
-            status_id,
-            decided_by,
-            decided_at,
-            reject_reason
+            idea_id, department_id, status_id, decided_by, decided_at, reject_reason
           )
           VALUES (
-            ${ideaId},
-            ${d},
-            ${pending.id},
-            NULL,
-            NULL,
-            NULL
+            ${ideaId}, ${departmentId}, ${pending.id}, NULL, NULL, NULL
           )
           ON CONFLICT (idea_id, department_id) DO UPDATE SET
             status_id = EXCLUDED.status_id,
@@ -1060,7 +1036,9 @@ const assignDepartments = async (req, res) => {
 
       await trx`
         INSERT INTO idea_workflow_log (idea_id, step, action, by_user, description)
-        VALUES (${ideaId}, 'department_review', 'assigned', ${userId}, 'Departments assigned')
+        VALUES (
+          ${ideaId}, 'department_review', 'assigned', ${userId}, 'Departments assigned'
+        )
       `;
     });
 
@@ -2360,21 +2338,33 @@ const saveIdeaResponsibles = async (req, res) => {
 const getCommissionPeople = async (req, res) => {
   try {
     const ideaId = Number(req.params.id);
-    if (!Number.isInteger(ideaId)) {
+    if (!Number.isInteger(ideaId) || ideaId <= 0) {
       return res.status(400).json({ message: "Invalid idea id" });
     }
 
     const rows = await sql`
-      SELECT DISTINCT
-        u.id,
-        u.name,
-        u.surname,
-        u.email,
-        u.role_id,
-        u.department_id
+      SELECT u.id, u.name, u.surname, u.email, u.role_id, u.department_id
       FROM users u
-      JOIN idea_departments idp ON idp.department_id = u.department_id
-      WHERE idp.idea_id = ${ideaId}
+      WHERE EXISTS (
+        SELECT 1
+        FROM idea_departments idp
+        WHERE idp.idea_id = ${ideaId}
+          AND idp.department_id = u.department_id
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM ideas i
+        JOIN users author ON author.id = i.user_id
+        WHERE i.id = ${ideaId}
+          AND author.supervisor = u.id
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM commissions c
+        JOIN commission_members cm ON cm.commission_id = c.id
+        WHERE c.idea_id = ${ideaId}
+          AND cm.user_id = u.id
+      )
       ORDER BY u.surname ASC, u.name ASC
     `;
 
