@@ -1,32 +1,26 @@
 const sql = require("../controllers/db");
-const { sendMailViaGraph } = require("../controllers/mailerController");
 
+const { sendMailViaGraph } = require("../controllers/mailerController");
 const uniqByEmail = (rows = []) => {
   const map = new Map();
-
   for (const r of rows) {
     const email = String(r?.email || "")
       .trim()
       .toLowerCase();
-
     if (!email) continue;
-
     if (!map.has(email)) {
       map.set(email, r);
     }
   }
-
   return [...map.values()];
 };
 
 const safeName = (u) => {
   const full = `${u?.name || ""} ${u?.surname || ""}`.trim();
-
   return full || u?.email || "User";
 };
 
 const toIdeaNo = (idea) => String(idea?.id ?? "");
-
 const getIdeaCore = async (ideaId, trx = sql) => {
   const rows = await trx`
     SELECT
@@ -39,17 +33,12 @@ const getIdeaCore = async (ideaId, trx = sql) => {
       u.email AS author_email,
       u.name AS author_name,
       u.surname AS author_surname
-
     FROM ideas i
-
     JOIN users u
       ON u.id = i.user_id
-
     WHERE i.id = ${ideaId}
-
     LIMIT 1
   `;
-
   return rows?.[0] || null;
 };
 
@@ -62,33 +51,27 @@ const getUserById = async (userId, trx = sql) => {
       surname,
       role_id,
       department_id
-
     FROM users
-
     WHERE id = ${userId}
-
     LIMIT 1
   `;
-
   return rows?.[0] || null;
 };
 
 const getUsersByIds = async (
   userIds = [],
-  trx = sql
+  trx = sql,
 ) => {
   const ids = [
     ...new Set(
       (Array.isArray(userIds) ? userIds : [])
         .map(Number)
-        .filter(Number.isInteger)
+        .filter(Number.isInteger),
     ),
   ];
-
   if (!ids.length) {
     return [];
   }
-
   const rows = await trx`
     SELECT
       id AS user_id,
@@ -97,18 +80,15 @@ const getUsersByIds = async (
       surname,
       role_id,
       department_id
-
     FROM users
-
     WHERE id IN ${trx(ids)}
   `;
-
   return rows;
 };
 
 const getDepartmentHeadsForIdea = async (
   ideaId,
-  trx = sql
+  trx = sql,
 ) => {
   const rows = await trx`
     SELECT DISTINCT
@@ -118,25 +98,20 @@ const getDepartmentHeadsForIdea = async (
       u.email,
       u.name,
       u.surname
-
     FROM idea_departments idp
-
     JOIN departments d
       ON d.id = idp.department_id
-
     JOIN users u
       ON u.id = d.supervisor_user_id
-
     WHERE idp.idea_id = ${ideaId}
       AND d.supervisor_user_id IS NOT NULL
   `;
-
   return rows;
 };
 
 const getCommissionMembersByIdea = async (
   ideaId,
-  trx = sql
+  trx = sql,
 ) => {
   const rows = await trx`
     SELECT DISTINCT
@@ -144,95 +119,77 @@ const getCommissionMembersByIdea = async (
       u.email,
       u.name,
       u.surname
-
     FROM commissions c
-
     JOIN commission_members cm
       ON cm.commission_id = c.id
-
     JOIN users u
       ON u.id = cm.user_id
-
     WHERE c.idea_id = ${ideaId}
   `;
-
   return rows;
 };
 
 const getSpecificCommissionMembersByIds = async (
   ideaId,
   userIds = [],
-  trx = sql
+  trx = sql,
 ) => {
   const ids = [
     ...new Set(
       userIds
         .map(Number)
-        .filter(Number.isInteger)
+        .filter(Number.isInteger),
     ),
   ];
-
   if (!ids.length) {
     return [];
   }
-
   const rows = await trx`
     SELECT DISTINCT
       u.id AS user_id,
       u.email,
       u.name,
       u.surname
-
     FROM commissions c
-
     JOIN commission_members cm
       ON cm.commission_id = c.id
-
     JOIN users u
       ON u.id = cm.user_id
-
     WHERE c.idea_id = ${ideaId}
       AND u.id IN ${trx(ids)}
   `;
-
   return rows;
 };
 
 const getDepartmentById = async (
   departmentId,
-  trx = sql
+  trx = sql,
 ) => {
   const rows = await trx`
     SELECT
       id,
       name,
       supervisor_user_id
-
     FROM departments
-
     WHERE id = ${departmentId}
-
     LIMIT 1
   `;
-
   return rows?.[0] || null;
 };
 
 const getStatusNameById = async (
   statusId,
-  trx = sql
+  trx = sql,
 ) => {
   if (!statusId) {
     return null;
   }
-
   const rows = await trx`
     SELECT name
     FROM status
     WHERE id = ${statusId}
     LIMIT 1
   `;
-
   return rows?.[0]?.name || null;
 };
 
@@ -247,7 +204,6 @@ const sendMailSafe = async ({
       subject,
       text,
     });
-
     return {
       ok: true,
     };
@@ -259,9 +215,8 @@ const sendMailSafe = async ({
         subject,
         message: e?.message,
         response: e?.response?.data,
-      }
+      },
     );
-
     return {
       ok: false,
       error: e,
@@ -271,45 +226,30 @@ const sendMailSafe = async ({
 
 const sendBulkPersonalized = async (
   recipients,
-  buildMessage
+  buildMessage,
 ) => {
   const unique = uniqByEmail(recipients);
   const results = [];
-
   for (const r of unique) {
     const msg = buildMessage(r);
-
-    if (
-      !msg?.to ||
-      !msg?.subject ||
-      !msg?.text
-    ) {
+    if (!msg?.to || !msg?.subject || !msg?.text) {
       continue;
     }
-
     const res = await sendMailSafe(msg);
-
     results.push({
       email: r.email,
       ok: res.ok,
     });
   }
-
   return results;
 };
 
-const notifySupervisorApproved = async ({
-  ideaId,
-}) => {
+const notifySupervisorApproved = async ({ ideaId }) => {
   const idea = await getIdeaCore(ideaId);
-
   if (!idea?.author_email) {
     return;
   }
-
-  const subject =
-    `Twój pomysł #${toIdeaNo(idea)} zmienił status`;
-
+  const subject = `Twój pomysł #${toIdeaNo(idea)} zmienił status`;
   const text = [
     `Cześć ${safeName({
       name: idea.author_name,
@@ -320,7 +260,6 @@ const notifySupervisorApproved = async ({
     `Twój pomysł o numerze ${idea.id} („${idea.title}”) został zaakceptowany przez przełożonego.`,
     "Pomysł został przekazany do dalszej akceptacji działów.",
   ].join("\n");
-
   await sendMailSafe({
     to: idea.author_email,
     subject,
@@ -333,14 +272,10 @@ const notifySupervisorRejected = async ({
   reason,
 }) => {
   const idea = await getIdeaCore(ideaId);
-
   if (!idea?.author_email) {
     return;
   }
-
-  const subject =
-    `Twój pomysł #${toIdeaNo(idea)} został odrzucony`;
-
+  const subject = `Twój pomysł #${toIdeaNo(idea)} został odrzucony`;
   const text = [
     `Cześć ${safeName({
       name: idea.author_name,
@@ -349,11 +284,8 @@ const notifySupervisorRejected = async ({
     })},`,
     "",
     `Twój pomysł o numerze ${idea.id} („${idea.title}”) został odrzucony przez przełożonego.`,
-    reason
-      ? `Powód: ${reason}`
-      : "Powód nie został podany.",
+    reason ? `Powód: ${reason}` : "Powód nie został podany.",
   ].join("\n");
-
   await sendMailSafe({
     to: idea.author_email,
     subject,
@@ -361,25 +293,16 @@ const notifySupervisorRejected = async ({
   });
 };
 
-const notifyDepartmentsAssigned = async ({
-  ideaId,
-}) => {
+const notifyDepartmentsAssigned = async ({ ideaId }) => {
   const idea = await getIdeaCore(ideaId);
-
   if (!idea) {
     return;
   }
-
   if (idea.author_email) {
-    const statusName =
-      await getStatusNameById(
-        idea.current_step ||
-        idea.status_id
-      ).catch(() => null);
-
-    const subject =
-      `Twój pomysł #${idea.id} został przekazany do działów`;
-
+    const statusName = await getStatusNameById(
+      idea.current_step || idea.status_id,
+    ).catch(() => null);
+    const subject = `Twój pomysł #${idea.id} został przekazany do działów`;
     const text = [
       `Cześć ${safeName({
         name: idea.author_name,
@@ -388,36 +311,25 @@ const notifyDepartmentsAssigned = async ({
       })},`,
       "",
       `Twój pomysł o numerze ${idea.id} („${idea.title}”) został przekazany do akceptacji działów.`,
-      statusName
-        ? `Aktualny status/etap: ${statusName}`
-        : "",
+      statusName ? `Aktualny status/etap: ${statusName}` : "",
     ]
       .filter(Boolean)
       .join("\n");
-
     await sendMailSafe({
       to: idea.author_email,
       subject,
       text,
     });
   }
-
-  const headRows =
-    await getDepartmentHeadsForIdea(ideaId);
-
+  const headRows = await getDepartmentHeadsForIdea(ideaId);
   const groupedHeads = new Map();
-
   for (const head of headRows) {
-    const email = String(
-      head?.email || ""
-    )
+    const email = String(head?.email || "")
       .trim()
       .toLowerCase();
-
     if (!email) {
       continue;
     }
-
     if (!groupedHeads.has(email)) {
       groupedHeads.set(email, {
         user_id: head.user_id,
@@ -427,20 +339,11 @@ const notifyDepartmentsAssigned = async ({
         departments: [],
       });
     }
-
-    const grouped =
-      groupedHeads.get(email);
-
-    const departmentId =
-      Number(head.department_id);
-
-    const alreadyAdded =
-      grouped.departments.some(
-        (department) =>
-          Number(department.id) ===
-          departmentId
-      );
-
+    const grouped = groupedHeads.get(email);
+    const departmentId = Number(head.department_id);
+    const alreadyAdded = grouped.departments.some(
+      (department) => Number(department.id) === departmentId,
+    );
     if (!alreadyAdded) {
       grouped.departments.push({
         id: departmentId,
@@ -448,52 +351,31 @@ const notifyDepartmentsAssigned = async ({
       });
     }
   }
-
-  const heads = [
-    ...groupedHeads.values(),
-  ];
-
+  const heads = [...groupedHeads.values()];
   await sendBulkPersonalized(
     heads,
     (head) => {
-      const departments = [
-        ...head.departments,
-      ].sort((a, b) =>
+      const departments = [...head.departments].sort((a, b) =>
         String(a.name || "").localeCompare(
           String(b.name || ""),
-          "pl"
-        )
+          "pl",
+        ),
       );
-
-      const departmentNames =
-        departments
-          .map(
-            (department) =>
-              department.name ||
-              `#${department.id}`
-          )
-          .filter(Boolean);
-
-      const singleDepartment =
-        departmentNames.length === 1;
-
-      const subject =
-        singleDepartment
-          ? `Dział ${departmentNames[0]} ma pomysł do akceptacji (#${idea.id})`
-          : `Masz pomysł do akceptacji w ${departmentNames.length} działach (#${idea.id})`;
-
-      const departmentLines =
-        singleDepartment
-          ? [
-              `Twój dział (${departmentNames[0]}) ma do akceptacji pomysł o numerze ${idea.id}.`,
-            ]
-          : [
-              `Działy, za które odpowiadasz, mają do akceptacji pomysł o numerze ${idea.id}:`,
-              ...departmentNames.map(
-                (name) => `- ${name}`
-              ),
-            ];
-
+      const departmentNames = departments
+        .map((department) => department.name || `#${department.id}`)
+        .filter(Boolean);
+      const singleDepartment = departmentNames.length === 1;
+      const subject = singleDepartment
+        ? `Dział ${departmentNames[0]} ma pomysł do akceptacji (#${idea.id})`
+        : `Masz pomysł do akceptacji w ${departmentNames.length} działach (#${idea.id})`;
+      const departmentLines = singleDepartment
+        ? [
+            `Twój dział (${departmentNames[0]}) ma do akceptacji pomysł o numerze ${idea.id}.`,
+          ]
+        : [
+            `Działy, za które odpowiadasz, mają do akceptacji pomysł o numerze ${idea.id}:`,
+            ...departmentNames.map((name) => `- ${name}`),
+          ];
       return {
         to: head.email,
         subject,
@@ -506,7 +388,7 @@ const notifyDepartmentsAssigned = async ({
           "Zaloguj się do systemu, aby podjąć decyzję osobno dla każdego przypisanego działu.",
         ].join("\n"),
       };
-    }
+    },
   );
 };
 
@@ -517,37 +399,17 @@ const notifyDepartmentDecision = async ({
   reason,
 }) => {
   const idea = await getIdeaCore(ideaId);
-
   if (!idea?.author_email) {
     return;
   }
-
-  const dept =
-    await getDepartmentById(
-      Number(departmentId)
-    );
-
-  const deptName =
-    dept?.name ||
-    `#${departmentId}`;
-
-  const actionNorm = String(
-    action || ""
-  ).toLowerCase();
-
-  const isReject =
-    actionNorm === "reject";
-
-  const actionLabel =
-    isReject
-      ? "odrzucił"
-      : "zaakceptował";
-
-  const subject =
-    isReject
-      ? `Pomysł #${idea.id} został odrzucony przez dział ${deptName}`
-      : `Pomysł #${idea.id} został zaakceptowany przez dział ${deptName}`;
-
+  const dept = await getDepartmentById(Number(departmentId));
+  const deptName = dept?.name || `#${departmentId}`;
+  const actionNorm = String(action || "").toLowerCase();
+  const isReject = actionNorm === "reject";
+  const actionLabel = isReject ? "odrzucił" : "zaakceptował";
+  const subject = isReject
+    ? `Pomysł #${idea.id} został odrzucony przez dział ${deptName}`
+    : `Pomysł #${idea.id} został zaakceptowany przez dział ${deptName}`;
   const text = [
     `Cześć ${safeName({
       name: idea.author_name,
@@ -556,13 +418,10 @@ const notifyDepartmentDecision = async ({
     })},`,
     "",
     `Dział ${deptName} ${actionLabel} Twój pomysł o numerze ${idea.id} („${idea.title}”).`,
-    isReject && reason
-      ? `Powód odrzucenia: ${reason}`
-      : "",
+    isReject && reason ? `Powód odrzucenia: ${reason}` : "",
   ]
     .filter(Boolean)
     .join("\n");
-
   await sendMailSafe({
     to: idea.author_email,
     subject,
@@ -575,17 +434,12 @@ const notifyCommissionCreated = async ({
   memberIds = null,
   source = "manual",
 }) => {
-  const idea =
-    await getIdeaCore(ideaId);
-
+  const idea = await getIdeaCore(ideaId);
   if (!idea) {
     return;
   }
-
   if (idea.author_email) {
-    const subject =
-      `Twój pomysł #${idea.id} przeszedł do komisji`;
-
+    const subject = `Twój pomysł #${idea.id} przeszedł do komisji`;
     const text = [
       `Cześć ${safeName({
         name: idea.author_name,
@@ -600,28 +454,21 @@ const notifyCommissionCreated = async ({
     ]
       .filter(Boolean)
       .join("\n");
-
     await sendMailSafe({
       to: idea.author_email,
       subject,
       text,
     });
   }
-
   let members = [];
-
-  if (
-    Array.isArray(memberIds) &&
-    memberIds.length > 0
-  ) {
+  if (Array.isArray(memberIds) && memberIds.length > 0) {
     const ids = [
       ...new Set(
         memberIds
           .map(Number)
-          .filter(Number.isInteger)
+          .filter(Number.isInteger),
       ),
     ];
-
     if (ids.length) {
       const rows = await sql`
         SELECT
@@ -629,27 +476,19 @@ const notifyCommissionCreated = async ({
           email,
           name,
           surname
-
         FROM users
-
         WHERE id IN ${sql(ids)}
       `;
-
       members = rows;
     }
   } else {
-    members =
-      await getCommissionMembersByIdea(
-        ideaId
-      );
+    members = await getCommissionMembersByIdea(ideaId);
   }
-
   await sendBulkPersonalized(
     members,
     (m) => ({
       to: m.email,
-      subject:
-        `Dodano Cię do komisji (pomysł #${idea.id})`,
+      subject: `Dodano Cię do komisji (pomysł #${idea.id})`,
       text: [
         `Cześć ${safeName(m)},`,
         "",
@@ -658,7 +497,7 @@ const notifyCommissionCreated = async ({
         "",
         "Zaloguj się do systemu, aby zobaczyć szczegóły.",
       ].join("\n"),
-    })
+    }),
   );
 };
 
@@ -666,26 +505,19 @@ const notifyCommissionMembersAdded = async ({
   ideaId,
   userIds = [],
 }) => {
-  const idea =
-    await getIdeaCore(ideaId);
-
+  const idea = await getIdeaCore(ideaId);
   if (!idea) {
     return;
   }
-
-  const members =
-    await getUsersByIds(userIds);
-
+  const members = await getUsersByIds(userIds);
   if (!members.length) {
     return;
   }
-
   await sendBulkPersonalized(
     members,
     (m) => ({
       to: m.email,
-      subject:
-        `Dodano Cię do komisji (pomysł #${idea.id})`,
+      subject: `Dodano Cię do komisji (pomysł #${idea.id})`,
       text: [
         `Cześć ${safeName(m)},`,
         "",
@@ -694,7 +526,7 @@ const notifyCommissionMembersAdded = async ({
         "",
         "Zaloguj się do systemu, aby zobaczyć szczegóły.",
       ].join("\n"),
-    })
+    }),
   );
 };
 
@@ -702,26 +534,19 @@ const notifyIdeaResponsiblesAssigned = async ({
   ideaId,
   userIds = [],
 }) => {
-  const idea =
-    await getIdeaCore(ideaId);
-
+  const idea = await getIdeaCore(ideaId);
   if (!idea) {
     return;
   }
-
-  const responsibles =
-    await getUsersByIds(userIds);
-
+  const responsibles = await getUsersByIds(userIds);
   if (!responsibles.length) {
     return;
   }
-
   await sendBulkPersonalized(
     responsibles,
     (u) => ({
       to: u.email,
-      subject:
-        `Dodano Cię jako osobę odpowiedzialną (pomysł #${idea.id})`,
+      subject: `Dodano Cię jako osobę odpowiedzialną (pomysł #${idea.id})`,
       text: [
         `Cześć ${safeName(u)},`,
         "",
@@ -731,23 +556,16 @@ const notifyIdeaResponsiblesAssigned = async ({
         "Zaloguj się do systemu, aby zobaczyć szczegóły i działania do wykonania.",
         "",
       ].join("\n"),
-    })
+    }),
   );
 };
 
-const notifyIdeaCompleted = async ({
-  ideaId,
-}) => {
-  const idea =
-    await getIdeaCore(ideaId);
-
+const notifyIdeaCompleted = async ({ ideaId }) => {
+  const idea = await getIdeaCore(ideaId);
   if (!idea?.author_email) {
     return;
   }
-
-  const subject =
-    `Twój pomysł #${idea.id} został zakończony`;
-
+  const subject = `Twój pomysł #${idea.id} został zakończony`;
   const text = [
     `Cześć ${safeName({
       name: idea.author_name,
@@ -757,7 +575,6 @@ const notifyIdeaCompleted = async ({
     "",
     `Twój pomysł o numerze ${idea.id} („${idea.title}”) został oznaczony jako zrealizowany/zakończony.`,
   ].join("\n");
-
   await sendMailSafe({
     to: idea.author_email,
     subject,
@@ -770,59 +587,37 @@ const notifyCommissionChairmanAssigned = async ({
   chairmanUserId,
   assignedByUserId = null,
 }) => {
-  const idea =
-    await getIdeaCore(ideaId);
-
+  const idea = await getIdeaCore(ideaId);
   if (!idea) {
     return;
   }
-
-  const chairman =
-    await getUserById(
-      Number(chairmanUserId)
-    );
-
+  const chairman = await getUserById(Number(chairmanUserId));
   if (!chairman?.email) {
     return;
   }
-
   const assignedBy =
-    Number.isInteger(
-      Number(assignedByUserId)
-    ) &&
-    Number(assignedByUserId) > 0
-      ? await getUserById(
-          Number(assignedByUserId)
-        ).catch(() => null)
+    Number.isInteger(Number(assignedByUserId)) && Number(assignedByUserId) > 0
+      ? await getUserById(Number(assignedByUserId)).catch(() => null)
       : null;
-
-  const subject =
-    `Wyznaczono Cię na przewodniczącego komisji (pomysł #${idea.id})`;
-
+  const subject = `Wyznaczono Cię na przewodniczącego komisji (pomysł #${idea.id})`;
   const text = [
     `Cześć ${safeName(chairman)},`,
     "",
     `Zostałeś/Zostałaś wyznaczony(a) na przewodniczącego komisji dla pomysłu o numerze ${idea.id}.`,
     `Tytuł pomysłu: ${idea.title}`,
-    assignedBy
-      ? `Osoba przypisująca: ${safeName(assignedBy)}`
-      : "",
+    assignedBy ? `Osoba przypisująca: ${safeName(assignedBy)}` : "",
     "",
     "Zaloguj się do systemu, aby zobaczyć szczegóły komisji.",
   ]
     .filter(Boolean)
     .join("\n");
-
   await sendMailSafe({
     to: chairman.email,
     subject,
     text,
   });
-
   if (idea.author_email) {
-    const authorSubject =
-      `Dla pomysłu #${idea.id} wyznaczono przewodniczącego komisji`;
-
+    const authorSubject = `Dla pomysłu #${idea.id} wyznaczono przewodniczącego komisji`;
     const authorText = [
       `Cześć ${safeName({
         name: idea.author_name,
@@ -833,13 +628,108 @@ const notifyCommissionChairmanAssigned = async ({
       `Dla Twojego pomysłu o numerze ${idea.id} („${idea.title}”) wyznaczono przewodniczącego komisji.`,
       `Przewodniczący: ${safeName(chairman)}`,
     ].join("\n");
-
     await sendMailSafe({
       to: idea.author_email,
       subject: authorSubject,
       text: authorText,
     });
   }
+};
+/**
+ * Normalizuje przypisania użytkowników (tablica/JSON/PG array)
+ * na unikalne identyfikatory użytkowników.
+ */
+const normalizeGoalAssigneeIds = (value) => {
+  let items = value;
+  if (typeof items === "string") {
+    const trimmed = items.trim();
+    if (!trimmed) return [];
+    try {
+      items = JSON.parse(trimmed);
+    } catch {
+      // Dopuszczalna tekstowa reprezentacja tablicy PostgreSQL: {12,34}.
+      if (!/^\{[\d\s,]*\}$/.test(trimmed)) return [];
+      items = trimmed.slice(1, -1).split(",");
+    }
+  }
+  if (!Array.isArray(items)) return [];
+  return [
+    ...new Set(
+      items.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0),
+    ),
+  ];
+};
+/**
+ * Informuje nowo przypisane osoby o konkretnym celu wdrożeniowym.
+ *
+ * Wywołanie: po zatwierdzonym zapisie commission_goals w bazie.
+ * userIds: TYLKO nowo przypisane osoby do TEGO celu, nie cała komisja
+ *          i nie pełna lista aktualnych odpowiedzialnych.
+ *
+ * Dodatkowo sprawdzamy, że cel należy do pomysłu, userIds rzeczywiście
+ * figurują w tabeli commission_goal_assignees, a odbiorcy są członkami komisji.
+ * Funkcja nie wykonuje porównania ze stanem SPRZED zapisu — to musi zrobić
+ * kontroler saveCommissionGoals, aby aktualizacja nie wysyłała duplikatów.
+ */
+const notifyCommissionGoalAssigned = async ({
+  ideaId,
+  goalId,
+  userIds = [],
+}) => {
+  const requestedIds = normalizeGoalAssigneeIds(userIds);
+  if (!requestedIds.length) return [];
+  const idea = await getIdeaCore(ideaId);
+  if (!idea) return [];
+  const rows = await sql`
+    SELECT
+      cg.id,
+      cg.goals,
+      cg.steps,
+      cg.due_date,
+      COALESCE(
+        array_agg(cga.user_id) FILTER (WHERE cga.user_id IS NOT NULL),
+        '{}'::int[]
+      ) AS assigned_to
+    FROM commission_goals cg
+    JOIN commissions c ON c.id = cg.commission_id
+    LEFT JOIN commission_goal_assignees cga ON cga.goal_id = cg.id
+    WHERE cg.id = ${goalId}
+      AND cg.idea_id = ${ideaId}
+      AND c.idea_id = ${ideaId}
+    GROUP BY cg.id
+    LIMIT 1
+  `;
+  const goal = rows?.[0];
+  if (!goal) return [];
+  const savedAssigneeIds = new Set(normalizeGoalAssigneeIds(goal.assigned_to));
+  const eligibleIds = requestedIds.filter((id) => savedAssigneeIds.has(id));
+  if (!eligibleIds.length) return [];
+  const members = await getSpecificCommissionMembersByIds(ideaId, eligibleIds);
+  if (!members.length) return [];
+  const rawDate = goal.due_date ? new Date(goal.due_date) : null;
+  const dueDateText =
+    rawDate && !Number.isNaN(rawDate.getTime())
+      ? rawDate.toLocaleDateString("pl-PL", { timeZone: "Europe/Warsaw" })
+      : "Nie określono";
+  return sendBulkPersonalized(members, (member) => ({
+    to: member.email,
+    subject: `Przypisano Ci cel wdrożeniowy (pomysł #${idea.id})`,
+    text: [
+      `Cześć ${safeName(member)},`,
+      "",
+      "Przypisano Ci nowy cel wdrożeniowy w aplikacji Kaizen.",
+      "",
+      `Numer pomysłu: #${idea.id}`,
+      `Tytuł pomysłu: ${idea.title}`,
+      `Cel wdrożeniowy: ${goal.goals || `#${goal.id}`}`,
+      goal.steps ? `Opis działań: ${goal.steps}` : "",
+      `Termin realizacji: ${dueDateText}`,
+      "",
+      "Zaloguj się do aplikacji Kaizen, aby zapoznać się ze szczegółami i zarządzać realizacją celu.",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  }));
 };
 
 const notifyCommissionGoalDeadlineReminder = async ({
@@ -852,29 +742,19 @@ const notifyCommissionGoalDeadlineReminder = async ({
   reminderType,
   daysLeft = null,
 }) => {
-  const idea =
-    await getIdeaCore(ideaId);
-
+  const idea = await getIdeaCore(ideaId);
   if (!idea) {
     return [];
   }
-
-  const dueDateText =
-    dueDate
-      ? new Date(
-          dueDate
-        ).toLocaleDateString("pl-PL")
-      : "brak";
-
+  const dueDateText = dueDate
+    ? new Date(dueDate).toLocaleDateString("pl-PL")
+    : "brak";
   const reminderLine =
     reminderType === "overdue"
       ? "Termin realizacji tego kroku został przekroczony."
       : `Do terminu realizacji pozostało ${daysLeft} ${
-          daysLeft === 1
-            ? "dzień"
-            : "dni"
+          daysLeft === 1 ? "dzień" : "dni"
         }.`;
-
   return await sendBulkPersonalized(
     recipients,
     (u) => ({
@@ -888,13 +768,8 @@ const notifyCommissionGoalDeadlineReminder = async ({
         "",
         `Przypomnienie dotyczące pomysłu #${idea.id}.`,
         `Tytuł pomysłu: ${idea.title}`,
-        `Krok (cel): ${
-          goalTitle ||
-          `#${goalId}`
-        }`,
-        goalSteps
-          ? `Opis kroków: ${goalSteps}`
-          : "",
+        `Krok (cel): ${goalTitle || `#${goalId}`}`,
+        goalSteps ? `Opis kroków: ${goalSteps}` : "",
         `Termin (due_date): ${dueDateText}`,
         reminderLine,
         "",
@@ -902,17 +777,14 @@ const notifyCommissionGoalDeadlineReminder = async ({
       ]
         .filter(Boolean)
         .join("\n"),
-    })
+    }),
   );
 };
 
-const notifySupervisorNewIdea = async ({
-  ideaId,
-}) => {
+const notifySupervisorNewIdea = async ({ ideaId }) => {
   /*
     Pierwszy etap akceptacji korzysta z
     users.supervisor autora pomysłu.
-
     departments.supervisor_user_id nie jest tutaj
     używany do wyznaczania akceptanta.
   */
@@ -920,47 +792,32 @@ const notifySupervisorNewIdea = async ({
     SELECT
       i.id AS idea_id,
       i.title AS idea_title,
-
       author.id AS author_id,
       author.name AS author_name,
       author.surname AS author_surname,
       author.email AS author_email,
       author.supervisor AS author_supervisor_id,
-
       d.id AS department_id,
       d.name AS department_name,
-
       supervisor.id AS supervisor_id,
       supervisor.name AS supervisor_name,
       supervisor.surname AS supervisor_surname,
       supervisor.email AS supervisor_email
-
     FROM ideas i
-
     JOIN users author
       ON author.id = i.user_id
-
     LEFT JOIN departments d
       ON d.id = author.department_id
-
     LEFT JOIN users supervisor
       ON supervisor.id = author.supervisor
-
     WHERE i.id = ${ideaId}
-
     LIMIT 1
   `;
-
   const data = rows?.[0];
-
   if (!data) {
-    console.warn(
-      `[notifySupervisorNewIdea] Idea ${ideaId} not found`
-    );
-
+    console.warn(`[notifySupervisorNewIdea] Idea ${ideaId} not found`);
     return;
   }
-
   /*
     Jeżeli autor nie ma przypisanego przełożonego,
     nie wysyłamy powiadomienia.
@@ -971,31 +828,19 @@ const notifySupervisorNewIdea = async ({
       {
         ideaId,
         authorId: data.author_id,
-        departmentId:
-          data.department_id,
-        supervisorId:
-          data.author_supervisor_id,
-      }
+        departmentId: data.department_id,
+        supervisorId: data.author_supervisor_id,
+      },
     );
-
     return;
   }
-
   const authorName =
-    `${data.author_name || ""} ${
-      data.author_surname || ""
-    }`.trim() ||
+    `${data.author_name || ""} ${data.author_surname || ""}`.trim() ||
     data.author_email;
-
   const supervisorName =
-    `${data.supervisor_name || ""} ${
-      data.supervisor_surname || ""
-    }`.trim() ||
+    `${data.supervisor_name || ""} ${data.supervisor_surname || ""}`.trim() ||
     data.supervisor_email;
-
-  const subject =
-    `Nowy pomysł do akceptacji (#${data.idea_id})`;
-
+  const subject = `Nowy pomysł do akceptacji (#${data.idea_id})`;
   const text = [
     `Cześć ${supervisorName},`,
     "",
@@ -1003,41 +848,28 @@ const notifySupervisorNewIdea = async ({
     "",
     `Numer pomysłu: ${data.idea_id}`,
     `Tytuł: ${data.idea_title}`,
-    data.department_name
-      ? `Dział autora: ${data.department_name}`
-      : "",
+    data.department_name ? `Dział autora: ${data.department_name}` : "",
     "",
     "Zaloguj się do systemu, aby zapoznać się z pomysłem i podjąć decyzję.",
   ]
     .filter(Boolean)
     .join("\n");
-
-  const result =
-    await sendMailSafe({
-      to: data.supervisor_email,
-      subject,
-      text,
-    });
-
+  const result = await sendMailSafe({
+    to: data.supervisor_email,
+    subject,
+    text,
+  });
   if (result?.ok) {
     console.log(
       "[notifySupervisorNewIdea] Mail sent",
       {
-        ideaId:
-          data.idea_id,
-
-        authorId:
-          data.author_id,
-
-        supervisorId:
-          data.supervisor_id,
-
-        email:
-          data.supervisor_email,
-      }
+        ideaId: data.idea_id,
+        authorId: data.author_id,
+        supervisorId: data.supervisor_id,
+        email: data.supervisor_email,
+      },
     );
   }
-
   return result;
 };
 
@@ -1052,5 +884,6 @@ module.exports = {
   notifyIdeaResponsiblesAssigned,
   notifyIdeaCompleted,
   notifyCommissionChairmanAssigned,
+  notifyCommissionGoalAssigned,
   notifyCommissionGoalDeadlineReminder,
 };

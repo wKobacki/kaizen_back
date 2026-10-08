@@ -10,7 +10,8 @@ const {
   notifyCommissionMembersAdded,
   notifyIdeaResponsiblesAssigned,
   notifyIdeaCompleted,
-  notifyCommissionChairmanAssigned
+  notifyCommissionChairmanAssigned,
+  notifyCommissionGoalAssigned
 } = require("../services/ideaNotificationService.js");
 
 const uniqInt = (arr) => {
@@ -1014,7 +1015,6 @@ const assignDepartments = async (req, res) => {
       return res.status(400).json({ message: "No valid departments provided" });
     }
 
-
     const [userRow] = await sql`
       SELECT department_id
       FROM users
@@ -1800,6 +1800,17 @@ const getIdeaDepartmentsShort = async (req, res) => {
   }
 };
 
+// Identyfikatory osób przypisanych do celu są w commission_goal_assignees.
+// W żądaniu assigned_to może być tablicą lub pojedynczym ID.
+const normalizeCommissionGoalAssignees = (value) => {
+  const values = Array.isArray(value)
+    ? value
+    : value === null || value === undefined || value === ""
+      ? []
+      : [value];
+  return [...new Set(values.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0))];
+};
+
 const saveCommissionGoals = async (req, res) => {
   try {
     console.log("content-type:", req.headers["content-type"]);
@@ -1808,7 +1819,7 @@ const saveCommissionGoals = async (req, res) => {
     const ideaId = Number(req.params.id);
     const { goals } = req.body;
 
-    if (!Number.isInteger(ideaId)) {
+    if (!Number.isInteger(ideaId) || ideaId <= 0) {
       return res.status(400).json({ message: "Invalid idea id" });
     }
 
@@ -1825,72 +1836,118 @@ const saveCommissionGoals = async (req, res) => {
 
     const commissionId = commission.id;
     const createdBy = req.user?.id || 1;
+    const assignedUserIds = goals.flatMap((g) => normalizeCommissionGoalAssignees(g?.assigned_to));
 
-    const assignedUserIds = goals.flatMap((g) => {
-      const a = g?.assigned_to;
-      if (Array.isArray(a)) return a;
-      if (a === null || typeof a === "undefined" || a === "") return [];
-      return [a];
-    });
-
-    let commissionMembersAddedByGoals = [];
-
-    await sql.begin(async (trx) => {
-      const ensureResult = await ensureCommissionMembers(ideaId, assignedUserIds, trx);
-      commissionMembersAddedByGoals = Array.isArray(ensureResult?.addedUserIds)
-        ? ensureResult.addedUserIds
-        : [];
-
-      const oldGoals = await trx`
-        SELECT id FROM commission_goals WHERE commission_id = ${commissionId}
-      `;
-
-      if (oldGoals.length) {
-        const ids = oldGoals.map((g) => g.id);
-        await trx`DELETE FROM commission_goal_assignees WHERE goal_id IN ${trx(ids)}`;
-      }
-
-      await trx`DELETE FROM commission_goals WHERE commission_id = ${commissionId}`;
-
-      for (const g of goals) {
-        const title = (g.title || "").trim();
-
-        const [inserted] = await trx`
-          INSERT INTO commission_goals (
-            idea_id, commission_id, goals, steps, estimated_cost, due_date, created_by, is_done
-          )
-          VALUES (
-            ${ideaId},
-            ${commissionId},
-            ${title},
-            ${g.description || ""},
-            ${g.estimated_cost || 0},
-            ${g.deadline || null},
-            ${createdBy},
-            ${g.is_done === true}
-          )
-          RETURNING id
+    // Porównanie odbywa się w jednej transakcji z zapisem. Blokada komisji
+    // zapobiega równoczesnemu wyliczaniu powiadomień dla tego samego stanu.
+    const { commissionMembersAddedByGoals, goalAssignmentsToNotify } =
+      await sql.begin(async (trx) => {
+        await trx`
+          SELECT id FROM commissions WHERE id = ${commissionId} FOR UPDATE
         `;
 
-        const assigneesRaw = g?.assigned_to;
-        const assignees = Array.isArray(assigneesRaw)
-          ? assigneesRaw
-          : assigneesRaw === null || typeof assigneesRaw === "undefined" || assigneesRaw === ""
-            ? []
-            : [assigneesRaw];
+        const oldGoals = await trx`
+          SELECT
+            cg.id,
+            cg.goals AS title,
+            COALESCE(
+              array_agg(cga.user_id) FILTER (WHERE cga.user_id IS NOT NULL),
+              '{}'::int[]
+            ) AS assigned_to
+          FROM commission_goals cg
+          LEFT JOIN commission_goal_assignees cga ON cga.goal_id = cg.id
+          WHERE cg.commission_id = ${commissionId}
+          GROUP BY cg.id
+          ORDER BY cg.id
+        `;
 
-        const unique = [...new Set(assignees.map(Number).filter(Number.isInteger))];
-
-        for (const userId of unique) {
-          await trx`
-            INSERT INTO commission_goal_assignees (goal_id, user_id)
-            VALUES (${inserted.id}, ${userId})
-            ON CONFLICT (goal_id, user_id) DO NOTHING
-          `;
+        const oldById = new Map(oldGoals.map((g) => [Number(g.id), g]));
+        const oldByTitle = new Map();
+        for (const oldGoal of oldGoals) {
+          const titleKey = String(oldGoal.title || "").trim().toLowerCase();
+          if (!oldByTitle.has(titleKey)) oldByTitle.set(titleKey, []);
+          oldByTitle.get(titleKey).push(oldGoal);
         }
-      }
-    });
+        const alreadyMatchedOldIds = new Set();
+        const findPreviousGoal = (incomingGoal) => {
+          const rawId = incomingGoal?.id;
+          const hasId = rawId !== null && rawId !== undefined && rawId !== "";
+          let previous = hasId ? oldById.get(Number(rawId)) : null;
 
+          // Zapis usuwa i odtwarza wiersze, więc nawet identyfikator z
+          // poprzedniego żądania może być już nieaktualny. Przy braku trafienia
+          // dopasowujemy po unikatowej nazwie. Zduplikowane nazwy są niejednoznaczne.
+          if (!previous) {
+            const key = String(incomingGoal?.title || "").trim().toLowerCase();
+            const candidates = oldByTitle.get(key) || [];
+            if (candidates.length === 1) previous = candidates[0];
+          }
+
+          if (!previous || alreadyMatchedOldIds.has(Number(previous.id))) return null;
+          alreadyMatchedOldIds.add(Number(previous.id));
+          return previous;
+        };
+
+        const ensureResult = await ensureCommissionMembers(ideaId, assignedUserIds, trx);
+        const newlyAddedMembers = Array.isArray(ensureResult?.addedUserIds)
+          ? ensureResult.addedUserIds
+          : [];
+
+        // Zachowujemy istniejącą strategię zapisu: zastąpienie całej listy celów.
+        if (oldGoals.length) {
+          const ids = oldGoals.map((g) => g.id);
+          await trx`DELETE FROM commission_goal_assignees WHERE goal_id IN ${trx(ids)}`;
+        }
+        await trx`DELETE FROM commission_goals WHERE commission_id = ${commissionId}`;
+
+        const assignmentsToNotify = [];
+        for (const g of goals) {
+          const previous = findPreviousGoal(g);
+          const previousAssignees = new Set(
+            normalizeCommissionGoalAssignees(previous?.assigned_to)
+          );
+          const title = (g.title || "").trim();
+
+          const [inserted] = await trx`
+            INSERT INTO commission_goals (
+              idea_id, commission_id, goals, steps, estimated_cost, due_date, created_by, is_done
+            )
+            VALUES (
+              ${ideaId},
+              ${commissionId},
+              ${title},
+              ${g.description || ""},
+              ${g.estimated_cost || 0},
+              ${g.deadline || null},
+              ${createdBy},
+              ${g.is_done === true}
+            )
+            RETURNING id
+          `;
+
+          const currentAssignees = normalizeCommissionGoalAssignees(g?.assigned_to);
+          for (const userId of currentAssignees) {
+            await trx`
+              INSERT INTO commission_goal_assignees (goal_id, user_id)
+              VALUES (${inserted.id}, ${userId})
+              ON CONFLICT (goal_id, user_id) DO NOTHING
+            `;
+          }
+
+          const newlyAssigned = currentAssignees.filter((id) => !previousAssignees.has(id));
+          if (newlyAssigned.length) {
+            assignmentsToNotify.push({ goalId: Number(inserted.id), userIds: newlyAssigned });
+          }
+        }
+
+        return {
+          commissionMembersAddedByGoals: newlyAddedMembers,
+          goalAssignmentsToNotify: assignmentsToNotify,
+        };
+      });
+
+    // Nie wysyłamy żadnej poczty w trakcie transakcji.
+    // Dotychczasowe powiadomienie o wejściu do komisji pozostaje bez zmian.
     if (commissionMembersAddedByGoals.length > 0) {
       try {
         await notifyCommissionMembersAdded({
@@ -1899,6 +1956,28 @@ const saveCommissionGoals = async (req, res) => {
         });
       } catch (mailErr) {
         console.error("notifyCommissionMembersAdded(from saveCommissionGoals) ERROR:", mailErr);
+      }
+    }
+
+    // Osoba, która była już członkiem komisji, otrzymuje wiadomość właśnie tu:
+    // podczas pierwszego przypisania do konkretnego celu wdrożeniowego.
+    for (const assignment of goalAssignmentsToNotify) {
+      try {
+        const sent = await notifyCommissionGoalAssigned({
+          ideaId,
+          goalId: assignment.goalId,
+          userIds: assignment.userIds,
+        });
+        const failed = (sent || []).filter((entry) => !entry.ok);
+        if (failed.length) {
+          console.warn("notifyCommissionGoalAssigned: failed recipients", {
+            ideaId, goalId: assignment.goalId, failed,
+          });
+        }
+      } catch (mailErr) {
+        console.error("notifyCommissionGoalAssigned ERROR:", {
+          ideaId, goalId: assignment.goalId, error: mailErr,
+        });
       }
     }
 
