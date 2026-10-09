@@ -873,6 +873,32 @@ const notifySupervisorNewIdea = async ({ ideaId }) => {
   return result;
 };
 
+const notifyCommissionGoalCompleted = async ({
+  ideaId,
+  ideaTitle,
+  goalId,
+  goalTitle,
+  goalSteps,
+  recipients = []
+}) => {
+  return sendBulkPersonalized(recipients, (user) => ({
+    to: user.email,
+    subject: `Zakończono cel wdrożeniowy (pomysł #${ideaId})`,
+    text: [
+      `Cześć ${safeName(user)},`,
+      "",
+      "Cel wdrożeniowy w aplikacji Kaizen został oznaczony jako zakończony.",
+      "",
+      `Numer pomysłu: #${ideaId}`,
+      `Tytuł pomysłu: ${ideaTitle}`,
+      `Cel wdrożeniowy: ${goalTitle || `#${goalId}`}`,
+      ...(goalSteps ? [`Opis działań: ${goalSteps}`] : []),
+      "",
+      "Zaloguj się do aplikacji Kaizen, aby zobaczyć szczegóły."
+    ].join("\n")
+  }));
+};
+
 module.exports = {
   notifySupervisorNewIdea,
   notifySupervisorApproved,
@@ -886,4 +912,5 @@ module.exports = {
   notifyCommissionChairmanAssigned,
   notifyCommissionGoalAssigned,
   notifyCommissionGoalDeadlineReminder,
+  notifyCommissionGoalCompleted
 };

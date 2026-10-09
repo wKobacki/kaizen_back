@@ -11,7 +11,8 @@ const {
   notifyIdeaResponsiblesAssigned,
   notifyIdeaCompleted,
   notifyCommissionChairmanAssigned,
-  notifyCommissionGoalAssigned
+  notifyCommissionGoalAssigned,
+  notifyCommissionGoalCompleted
 } = require("../services/ideaNotificationService.js");
 
 const uniqInt = (arr) => {
@@ -2069,47 +2070,108 @@ const getCommissionGoals = async (req, res) => {
 
 const updateCommissionGoalStatus = async (req, res) => {
   try {
-    const ideaId = req.params.id;
-    const { goalId, is_done } = req.body;
+    const ideaId = Number(req.params.id);
+    const goalId = Number(req.body?.goalId);
+    const isDone = req.body?.is_done;
 
-    if (goalId === undefined) {
-      return res.status(400).json({ message: "goalId is required" });
+    if (!Number.isSafeInteger(ideaId) || ideaId <= 0) {
+      return res.status(400).json({ message: "Invalid idea id" });
     }
-
-    if (typeof is_done !== "boolean") {
+    if (!Number.isSafeInteger(goalId) || goalId <= 0) {
+      return res.status(400).json({ message: "Invalid goal id" });
+    }
+    if (typeof isDone !== "boolean") {
       return res.status(400).json({ message: "is_done must be boolean" });
     }
 
-    const commission = await sql`
-      SELECT id 
-      FROM commissions
-      WHERE idea_id = ${ideaId}
-      LIMIT 1
-    `;
+    const result = await sql.begin(async (trx) => {
+      const [commission] = await trx`
+        SELECT c.id, c.chairman_user_id, i.title AS idea_title
+        FROM commissions c
+        JOIN ideas i ON i.id = c.idea_id
+        WHERE c.idea_id = ${ideaId}
+        LIMIT 1
+        FOR UPDATE OF c
+      `;
+      if (!commission) {
+        return { error: { status: 404, message: "Commission not found" } };
+      }
 
-    if (commission.length === 0) {
-      return res.status(404).json({ message: "Commission not found" });
+      const [goal] = await trx`
+        SELECT id, goals, steps, is_done
+        FROM commission_goals
+        WHERE id = ${goalId}
+          AND commission_id = ${commission.id}
+          AND idea_id = ${ideaId}
+        LIMIT 1
+        FOR UPDATE
+      `;
+      if (!goal) {
+        return { error: { status: 404, message: "Goal not found" } };
+      }
+
+      const wasDone = goal.is_done === true;
+      if (wasDone === isDone) {
+        return { notification: null };
+      }
+
+      await trx`
+        UPDATE commission_goals
+        SET is_done = ${isDone}
+        WHERE id = ${goalId}
+          AND commission_id = ${commission.id}
+          AND idea_id = ${ideaId}
+      `;
+
+      if (!isDone) {
+        return { notification: null };
+      }
+
+      const recipients = await trx`
+        SELECT u.id AS user_id, u.email, u.name, u.surname
+        FROM users u
+        WHERE u.id = ${commission.chairman_user_id}
+          OR EXISTS (
+            SELECT 1
+            FROM commission_goal_assignees cga
+            WHERE cga.goal_id = ${goalId}
+              AND cga.user_id = u.id
+          )
+      `;
+
+      return {
+        notification: {
+          ideaId,
+          ideaTitle: commission.idea_title,
+          goalId: goal.id,
+          goalTitle: goal.goals,
+          goalSteps: goal.steps,
+          recipients
+        }
+      };
+    });
+
+    if (result.error) {
+      return res.status(result.error.status).json({
+        message: result.error.message
+      });
     }
 
-    const commissionId = commission[0].id;
-
-    const goal = await sql`
-      SELECT id
-      FROM commission_goals
-      WHERE id = ${goalId}
-        AND commission_id = ${commissionId}
-    `;
-
-    if (goal.length === 0) {
-      return res.status(404).json({ message: "Goal not found" });
+    if (result.notification) {
+      try {
+        const sent = await notifyCommissionGoalCompleted(result.notification);
+        const failed = (sent || []).filter((entry) => !entry.ok);
+        if (failed.length) {
+          console.warn("notifyCommissionGoalCompleted: failed recipients", {
+            ideaId, goalId, failed
+          });
+        }
+      } catch (mailErr) {
+        console.error("notifyCommissionGoalCompleted ERROR:", {
+          ideaId, goalId, error: mailErr
+        });
+      }
     }
-
-    await sql`
-      UPDATE commission_goals
-      SET is_done = ${is_done}
-      WHERE id = ${goalId}
-        AND commission_id = ${commissionId}
-    `;
 
     return res.json({ message: "Goal updated successfully" });
   } catch (error) {
