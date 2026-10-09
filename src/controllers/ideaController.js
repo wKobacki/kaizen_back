@@ -153,10 +153,11 @@ const ensureCommissionMembers = async (ideaId, userIds, trx = sql) => {
 
 const createIdea = async (req, res) => {
   try {
-    const { title, description, solution, department_id } = req.body;
+    const { title, description, department_id } = req.body;
+    const solution = req.body.solution ?? "";
     const userId = req.user?.id;
 
-    if (!title || !description || !solution || !userId) {
+    if (!title?.trim() || !description?.trim() || !userId) {
       return res.status(400).json({ message: "Missing required fields" });
     }
 
