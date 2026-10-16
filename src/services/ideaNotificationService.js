@@ -1,6 +1,7 @@
 const sql = require("../controllers/db");
 
 const { sendMailViaGraph } = require("../controllers/mailerController");
+const { BASE_URL } = require("../../config");
 const uniqByEmail = (rows = []) => {
   const map = new Map();
   for (const r of rows) {
@@ -873,6 +874,89 @@ const notifySupervisorNewIdea = async ({ ideaId }) => {
   return result;
 };
 
+const notifySupervisorCommissionSelection = async ({
+  ideaId,
+  supervisorId,
+}) => {
+  const rows = await sql`
+    SELECT
+      i.id AS idea_id,
+      i.title AS idea_title,
+      author.supervisor AS supervisor_id,
+      supervisor.email AS supervisor_email,
+      supervisor.name AS supervisor_name,
+      supervisor.surname AS supervisor_surname
+    FROM ideas i
+    JOIN users author ON author.id = i.user_id
+    LEFT JOIN users supervisor ON supervisor.id = author.supervisor
+    WHERE i.id = ${ideaId}
+    LIMIT 1
+  `;
+  const idea = rows?.[0];
+  if (!idea) {
+    console.warn("[notifySupervisorCommissionSelection] Idea not found", { ideaId });
+    return { ok: false };
+  }
+
+  const recipientId = Number(idea.supervisor_id);
+  if (
+    !Number.isSafeInteger(recipientId) ||
+    recipientId <= 0 ||
+    recipientId !== Number(supervisorId) ||
+    !idea.supervisor_email
+  ) {
+    console.warn("[notifySupervisorCommissionSelection] No matching idea supervisor email", {
+      ideaId,
+      expectedSupervisorId: supervisorId,
+      actualSupervisorId: idea.supervisor_id,
+    });
+    return { ok: false };
+  }
+
+  const frontendUrl = String(process.env.FRONTEND_URL || BASE_URL || "")
+    .trim()
+    .replace(/\/+$/, "");
+  const ideaUrl = `${frontendUrl}/ideas/${idea.idea_id}/commission`;
+  const supervisorName =
+    `${idea.supervisor_name || ""} ${idea.supervisor_surname || ""}`.trim() ||
+    idea.supervisor_email;
+  const message = {
+    to: idea.supervisor_email,
+    subject: `Wybór komisji dla pomysłu #${idea.idea_id}`,
+    text: [
+      `Cześć ${supervisorName},`,
+      "",
+      "Wszystkie przypisane działy zaakceptowały pomysł.",
+      "Prosimy o wybranie składu komisji.",
+      "",
+      `Numer pomysłu: #${idea.idea_id}`,
+      `Tytuł: ${idea.idea_title}`,
+      `Otwórz pomysł i wybierz komisję: ${ideaUrl}`,
+    ].join("\n"),
+  };
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const result = await sendMailSafe(message);
+    if (result.ok) {
+      console.log("[notifySupervisorCommissionSelection] Mail sent", {
+        ideaId,
+        supervisorId: recipientId,
+        attempt,
+      });
+      return result;
+    }
+    if (attempt < 3) {
+      await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+    }
+  }
+
+  console.error("[notifySupervisorCommissionSelection] Mail failed after retries", {
+    ideaId,
+    supervisorId: recipientId,
+  });
+  return { ok: false };
+};
+
 const notifyCommissionGoalCompleted = async ({
   ideaId,
   ideaTitle,
@@ -901,6 +985,7 @@ const notifyCommissionGoalCompleted = async ({
 
 module.exports = {
   notifySupervisorNewIdea,
+  notifySupervisorCommissionSelection,
   notifySupervisorApproved,
   notifySupervisorRejected,
   notifyDepartmentsAssigned,

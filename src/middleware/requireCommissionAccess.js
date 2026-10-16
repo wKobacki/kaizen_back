@@ -15,9 +15,10 @@ const requireCommissionAccess = ({ allowOwner = false, mode = "read" } = {}) => 
       const isAdmin = roleId === 1 || roleName === "admin";
 
       const [idea] = await sql`
-        SELECT user_id
-        FROM ideas
-        WHERE id = ${ideaId}
+        SELECT i.user_id, author.supervisor AS supervisor_id
+        FROM ideas i
+        LEFT JOIN users author ON author.id = i.user_id
+        WHERE i.id = ${ideaId}
         LIMIT 1
       `;
       if (!idea) return res.status(404).json({ message: "Idea not found" });
@@ -25,7 +26,7 @@ const requireCommissionAccess = ({ allowOwner = false, mode = "read" } = {}) => 
       const isOwner = Number(idea.user_id) === userId;
 
       const [commission] = await sql`
-        SELECT id
+        SELECT id, chairman_user_id
         FROM commissions
         WHERE idea_id = ${ideaId}
         LIMIT 1
@@ -40,17 +41,56 @@ const requireCommissionAccess = ({ allowOwner = false, mode = "read" } = {}) => 
         LIMIT 1
       `;
       const isMember = member.length > 0;
+      const isChairman = Number(commission.chairman_user_id) === userId;
 
       const canRead = isAdmin || isMember || (allowOwner && isOwner);
       const canWrite = isAdmin || isMember;
 
-      const ok = mode === "write" ? canWrite : canRead;
+      const canManageMembers = isAdmin || isChairman;
+      const canAssignFirstChairman =
+        mode === "manage-chairman" &&
+        !commission.chairman_user_id &&
+        Number(idea.supervisor_id) === userId;
+      let canEditGoal = false;
+      if (mode === "goal-write" && !isAdmin && !isChairman && !isMember) {
+        const submittedGoals = Array.isArray(req.body?.goals) ? req.body.goals : [];
+        const requestedGoalIds = [
+          req.body?.goalId,
+          ...submittedGoals.map((goal) => goal?.id),
+        ]
+          .map(Number)
+          .filter((id) => Number.isSafeInteger(id) && id > 0);
+        if (requestedGoalIds.length > 0) {
+          const assignedGoal = await sql`
+            SELECT 1
+            FROM commission_goal_assignees cga
+            JOIN commission_goals cg ON cg.id = cga.goal_id
+            WHERE cg.commission_id = ${commission.id}
+              AND cga.user_id = ${userId}
+              AND cg.id IN ${sql(requestedGoalIds)}
+            LIMIT 1
+          `;
+          canEditGoal = assignedGoal.length > 0;
+        }
+      }
+
+      let ok = canRead;
+      if (mode === "manage-members") {
+        ok = canManageMembers;
+      } else if (mode === "manage-chairman") {
+        ok = canManageMembers || canAssignFirstChairman;
+      } else if (mode === "goal-write") {
+        ok = isAdmin || isChairman || isMember || canEditGoal;
+      } else if (mode === "write") {
+        ok = canWrite;
+      }
       if (!ok) return res.status(403).json({ message: "Forbidden" });
 
       req.commission_id = commission.id;
       req.is_admin = isAdmin;
       req.is_owner = isOwner;
       req.is_commission_member = isMember;
+      req.is_commission_chairman = isChairman;
 
       next();
     } catch (e) {

@@ -4,6 +4,7 @@ const {
   notifySupervisorNewIdea,
   notifySupervisorApproved,
   notifySupervisorRejected,
+  notifySupervisorCommissionSelection,
   notifyDepartmentsAssigned,
   notifyDepartmentDecision,
   notifyCommissionCreated,
@@ -15,15 +16,6 @@ const {
   notifyCommissionGoalCompleted
 } = require("../services/ideaNotificationService.js");
 
-const uniqInt = (arr) => {
-  const s = new Set();
-  for (const v of arr) {
-    const n = Number(v);
-    if (Number.isInteger(n)) s.add(n);
-  }
-  return [...s];
-};
-
 const norm = (v) => String(v ?? "").trim().toLowerCase();
 
 const getStatusId = async (trx, name) => {
@@ -32,56 +24,20 @@ const getStatusId = async (trx, name) => {
   return Number(row.id);
 };
 
-const ensureCommissionWithDeptSupervisors = async (trx, ideaId, createdBy) => {
-  const inserted = await trx`
-    INSERT INTO commissions (idea_id, created_by)
-    VALUES (${ideaId}, ${createdBy})
-    ON CONFLICT (idea_id) DO NOTHING
+const getOrCreateStatusId = async (trx, name) => {
+  await trx`SELECT pg_advisory_xact_lock(721983, 1)`;
+  const [existing] = await trx`
+    SELECT id FROM status WHERE name = ${name} LIMIT 1
+  `;
+  if (existing) return Number(existing.id);
+
+  const [inserted] = await trx`
+    INSERT INTO status (name)
+    VALUES (${name})
     RETURNING id
   `;
-  let commissionId = inserted?.[0]?.id;
-
-  if (!commissionId) {
-    const [existing] = await trx`
-      SELECT id FROM commissions WHERE idea_id = ${ideaId} LIMIT 1
-    `;
-    commissionId = existing?.id;
-  }
-  if (!commissionId) {
-    throw new Error("Cannot resolve commissionId");
-  }
-
-  const approvedId = await getStatusId(trx, "department_approved");
-  const rows = await trx`
-    SELECT d.supervisor_user_id AS user_id
-    FROM idea_departments idp
-    JOIN departments d ON d.id = idp.department_id
-    WHERE idp.idea_id = ${ideaId}
-      AND idp.status_id = ${approvedId}
-      AND d.supervisor_user_id IS NOT NULL
-    UNION
-    SELECT author.supervisor AS user_id
-    FROM ideas i
-    JOIN users author ON author.id = i.user_id
-    WHERE i.id = ${ideaId}
-      AND author.supervisor IS NOT NULL
-  `;
-
-  const supervisorIds = uniqInt(rows.map((r) => r.user_id));
-  let addedCount = 0;
-
-  if (supervisorIds.length > 0) {
-    const values = supervisorIds.map((uid) => [commissionId, uid]);
-    const insertedMembers = await trx`
-      INSERT INTO commission_members (commission_id, user_id)
-      VALUES ${trx(values)}
-      ON CONFLICT (commission_id, user_id) DO NOTHING
-      RETURNING id
-    `;
-    addedCount = insertedMembers?.length ?? 0;
-  }
-
-  return { commissionId, addedCount, supervisorIds };
+  if (!inserted) throw new Error(`Cannot create status in DB: ${name}`);
+  return Number(inserted.id);
 };
 
 const ensureCommissionMembers = async (ideaId, userIds, trx = sql) => {
@@ -1115,8 +1071,8 @@ const departmentDecision = async (req, res) => {
       message: "Decision saved",
     };
 
-    let shouldNotifyCommissionAutoCreated = false;
-    let autoCommissionSupervisorIds = [];
+    let shouldNotifyCommissionSelection = false;
+    let commissionSelectionSupervisorId = null;
 
     const transactionResult = await sql.begin(async (trx) => {
       const statusApprovedId = await getStatusId(
@@ -1132,11 +1088,6 @@ const departmentDecision = async (req, res) => {
       const statusReviewId = await getStatusId(
         trx,
         "department_review"
-      );
-
-      const statusCommissionCreatedId = await getStatusId(
-        trx,
-        "commission_created"
       );
 
       const targetRows = await trx`
@@ -1315,55 +1266,61 @@ const departmentDecision = async (req, res) => {
           WHERE id = ${ideaId}
         `;
       } else if (allApproved) {
-        const {
-          commissionId,
-          addedCount,
-          supervisorIds,
-        } = await ensureCommissionWithDeptSupervisors(
-          trx,
-          ideaId,
-          userId
-        );
-
-        shouldNotifyCommissionAutoCreated = true;
-
-        autoCommissionSupervisorIds =
-          Array.isArray(supervisorIds)
-            ? supervisorIds
-            : [];
-
-        await trx`
-          UPDATE ideas
-
-          SET
-            status_id = ${statusCommissionCreatedId},
-            current_step = ${statusCommissionCreatedId}
-
-          WHERE id = ${ideaId}
+        const [commission] = await trx`
+          SELECT id FROM commissions WHERE idea_id = ${ideaId} LIMIT 1
         `;
 
-        await trx`
-          INSERT INTO idea_workflow_log (
-            idea_id,
-            step,
-            action,
-            by_user,
-            description
-          )
-          VALUES (
-            ${ideaId},
-            'commission',
-            'auto_created',
-            ${userId},
-            ${`Commission auto-created. Added supervisors: ${addedCount}`}
-          )
-        `;
+        if (commission) {
+          const statusCommissionCreatedId = await getStatusId(
+            trx,
+            "commission_created"
+          );
+          await trx`
+            UPDATE ideas
+            SET status_id = ${statusCommissionCreatedId},
+                current_step = ${statusCommissionCreatedId}
+            WHERE id = ${ideaId}
+          `;
+        } else {
+          const statusAwaitingCommissionId = await getOrCreateStatusId(
+            trx,
+            "awaiting_commission_selection"
+          );
+          shouldNotifyCommissionSelection = true;
+          const [ideaSupervisor] = await trx`
+            SELECT author.supervisor AS supervisor_id
+            FROM ideas i
+            JOIN users author ON author.id = i.user_id
+            WHERE i.id = ${ideaId}
+            LIMIT 1
+          `;
+          commissionSelectionSupervisorId = Number(ideaSupervisor?.supervisor_id);
 
-        responsePayload = {
-          message:
-            "All departments approved. Commission auto-created.",
-          commissionId,
-        };
+          await trx`
+            UPDATE ideas
+            SET status_id = ${statusAwaitingCommissionId},
+                current_step = ${statusAwaitingCommissionId}
+            WHERE id = ${ideaId}
+          `;
+
+          await trx`
+            INSERT INTO idea_workflow_log (
+              idea_id, step, action, by_user, description
+            )
+            VALUES (
+              ${ideaId},
+              'commission',
+              'awaiting_selection',
+              ${userId},
+              'All departments approved; awaiting supervisor commission selection'
+            )
+          `;
+
+          responsePayload = {
+            message: "All departments approved. Commission selection is awaiting the idea supervisor.",
+            status: "awaiting_commission_selection",
+          };
+        }
       } else {
         await trx`
           UPDATE ideas
@@ -1406,17 +1363,15 @@ const departmentDecision = async (req, res) => {
       );
     }
 
-    if (shouldNotifyCommissionAutoCreated) {
+    if (shouldNotifyCommissionSelection) {
       try {
-        await notifyCommissionCreated({
+        await notifySupervisorCommissionSelection({
           ideaId,
-          memberIds:
-            autoCommissionSupervisorIds,
-          source: "auto",
+          supervisorId: commissionSelectionSupervisorId,
         });
       } catch (mailErr) {
         console.error(
-          "notifyCommissionCreated(auto) ERROR:",
+          "notifySupervisorCommissionSelection ERROR:",
           mailErr
         );
       }
@@ -1437,56 +1392,125 @@ const departmentDecision = async (req, res) => {
 
 const createCommission = async (req, res) => {
   try {
-    const ideaId = req.params.id;
-    const { members } = req.body;
-    const userId = req.user.id;
+    const ideaId = Number(req.params.id);
+    const userId = Number(req.user?.id);
+    const roleId = Number(req.user?.role_id ?? req.user?.roleId);
+    const isAdmin =
+      roleId === 1 ||
+      norm(req.user?.role_name) === "admin";
+    const members = req.body?.members;
 
-    const existing = await sql`
-      SELECT id FROM commissions WHERE idea_id = ${ideaId}
-    `;
-
-    if (existing.length > 0) {
-      return res.status(400).json({ message: "Commission already exists for this idea" });
+    if (!Number.isSafeInteger(ideaId) || ideaId <= 0) {
+      return res.status(400).json({ message: "Invalid idea id" });
+    }
+    if (!Number.isSafeInteger(userId) || userId <= 0) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    if (!Array.isArray(members)) {
+      return res.status(400).json({ message: "Members array is required" });
     }
 
-    const commission = await sql`
-      INSERT INTO commissions (idea_id, created_by)
-      VALUES (${ideaId}, ${userId})
-      RETURNING id
-    `;
+    const memberIds = [...new Set(members.map(Number))];
+    if (memberIds.some((id) => !Number.isSafeInteger(id) || id <= 0)) {
+      return res.status(400).json({ message: "Invalid commission member id" });
+    }
 
-    for (const member of members) {
-      await sql`
-        INSERT INTO commission_members (commission_id, user_id)
-        VALUES (${commission[0].id}, ${member})
+    const result = await sql.begin(async (trx) => {
+      const [idea] = await trx`
+        SELECT i.id, author.supervisor AS supervisor_id
+        FROM ideas i
+        JOIN users author ON author.id = i.user_id
+        WHERE i.id = ${ideaId}
+        LIMIT 1
+        FOR UPDATE OF i
       `;
+      if (!idea) {
+        return { error: { status: 404, message: "Idea not found" } };
+      }
+
+      if (!isAdmin && Number(idea.supervisor_id) !== userId) {
+        return { error: { status: 403, message: "Only the idea supervisor can create its commission" } };
+      }
+
+      const [existing] = await trx`
+        SELECT id FROM commissions WHERE idea_id = ${ideaId} LIMIT 1
+      `;
+      if (existing) {
+        return { error: { status: 409, message: "Commission already exists for this idea" } };
+      }
+
+      const statusApprovedId = await getStatusId(trx, "department_approved");
+      const departmentRows = await trx`
+        SELECT status_id
+        FROM idea_departments
+        WHERE idea_id = ${ideaId}
+      `;
+      if (
+        departmentRows.length === 0 ||
+        departmentRows.some((row) => Number(row.status_id) !== statusApprovedId)
+      ) {
+        return {
+          error: {
+            status: 409,
+            message: "All assigned departments must approve the idea before creating a commission",
+          },
+        };
+      }
+
+      if (memberIds.length > 0) {
+        const existingUsers = await trx`
+          SELECT id FROM users WHERE id IN ${trx(memberIds)}
+        `;
+        const existingUserIds = new Set(existingUsers.map((row) => Number(row.id)));
+        if (memberIds.some((id) => !existingUserIds.has(id))) {
+          return { error: { status: 400, message: "One or more commission members do not exist" } };
+        }
+      }
+
+      const [commission] = await trx`
+        INSERT INTO commissions (idea_id, created_by)
+        VALUES (${ideaId}, ${userId})
+        RETURNING id
+      `;
+
+      if (memberIds.length > 0) {
+        const values = memberIds.map((memberId) => [commission.id, memberId]);
+        await trx`
+          INSERT INTO commission_members (commission_id, user_id)
+          VALUES ${trx(values)}
+        `;
+      }
+
+      const statusCommissionId = await getStatusId(trx, "commission_created");
+      await trx`
+        UPDATE ideas
+        SET status_id = ${statusCommissionId},
+            current_step = ${statusCommissionId}
+        WHERE id = ${ideaId}
+      `;
+
+      await trx`
+        INSERT INTO idea_workflow_log (idea_id, step, action, by_user, description)
+        VALUES (${ideaId}, 'commission', 'created', ${userId}, 'Commission created')
+      `;
+
+      return { commissionId: commission.id };
+    });
+    if (result.error) {
+      return res.status(result.error.status).json({ message: result.error.message });
     }
-
-    const statusCommission = await sql`SELECT id FROM status WHERE name = 'commission_created'`;
-
-    await sql`
-      UPDATE ideas
-      SET status_id = ${statusCommission[0].id},
-          current_step = ${statusCommission[0].id}
-      WHERE id = ${ideaId}
-    `;
-
-    await sql`
-      INSERT INTO idea_workflow_log (idea_id, step, action, by_user, description)
-      VALUES (${ideaId}, 'commission', 'created', ${userId}, 'Commission created')
-    `;
 
     try {
       await notifyCommissionCreated({
-        ideaId: Number(ideaId),
-        memberIds: Array.isArray(members) ? members : [],
+        ideaId,
+        memberIds,
         source: "manual",
       });
     } catch (mailErr) {
       console.error("notifyCommissionCreated(manual) ERROR:", mailErr);
     }
 
-    return res.json({ message: "Commission created" });
+    return res.json({ message: "Commission created", commissionId: result.commissionId });
   } catch (error) {
     console.error(error);
     return res.status(500).json({ message: 'Internal server error' });
@@ -1670,12 +1694,15 @@ const getIdeaDepartmentsShort = async (req, res) => {
     const ideaRows = await sql`
       SELECT
         i.id,
-        current_status.name AS current_step_name
+        current_status.name AS current_step_name,
+        author.supervisor AS supervisor_id
 
       FROM ideas i
 
       LEFT JOIN status current_status
         ON current_status.id = i.current_step
+      JOIN users author
+        ON author.id = i.user_id
 
       WHERE i.id = ${ideaId}
 
@@ -1693,6 +1720,8 @@ const getIdeaDepartmentsShort = async (req, res) => {
     const workflowOpen =
       norm(idea.current_step_name) ===
       "department_review";
+    const isIdeaSupervisor =
+      Number(idea.supervisor_id) === userId;
 
     const depts = await sql`
       SELECT
@@ -1758,11 +1787,16 @@ const getIdeaDepartmentsShort = async (req, res) => {
           Number(dept.department_id)
       )
       .filter(Number.isInteger);
+    const allDepartmentsApproved =
+      depts.length > 0 &&
+      depts.every((department) => norm(department.status_name) === "department_approved");
 
     return res.status(200).json({
       result: depts,
       access: {
         isAdmin,
+        isIdeaSupervisor,
+        allDepartmentsApproved,
         workflowOpen,
         responsibleDepartmentIds,
         reviewableDepartmentIds,
@@ -1798,9 +1832,18 @@ const saveCommissionGoals = async (req, res) => {
 
     const ideaId = Number(req.params.id);
     const { goals } = req.body;
+    const userId = Number(req.user?.id);
+    const roleId = Number(req.user?.role_id ?? req.user?.roleId);
+    const isAdmin =
+      roleId === 1 ||
+      norm(req.user?.role_name) === "admin";
 
     if (!Number.isInteger(ideaId) || ideaId <= 0) {
       return res.status(400).json({ message: "Invalid idea id" });
+    }
+
+    if (!Number.isSafeInteger(userId) || userId <= 0) {
+      return res.status(401).json({ message: "Unauthorized" });
     }
 
     if (!Array.isArray(goals)) {
@@ -1815,16 +1858,23 @@ const saveCommissionGoals = async (req, res) => {
     }
 
     const commissionId = commission.id;
-    const createdBy = req.user?.id || 1;
+    const createdBy = userId;
     const assignedUserIds = goals.flatMap((g) => normalizeCommissionGoalAssignees(g?.assigned_to));
 
     // Porównanie odbywa się w jednej transakcji z zapisem. Blokada komisji
     // zapobiega równoczesnemu wyliczaniu powiadomień dla tego samego stanu.
-    const { commissionMembersAddedByGoals, goalAssignmentsToNotify } =
+    const saveResult =
       await sql.begin(async (trx) => {
-        await trx`
-          SELECT id FROM commissions WHERE id = ${commissionId} FOR UPDATE
+        const [lockedCommission] = await trx`
+          SELECT id, chairman_user_id
+          FROM commissions
+          WHERE id = ${commissionId}
+          FOR UPDATE
         `;
+        if (!lockedCommission) {
+          return { error: { status: 404, message: "Commission not found" } };
+        }
+        const isChairman = Number(lockedCommission.chairman_user_id) === userId;
 
         const oldGoals = await trx`
           SELECT
@@ -1840,6 +1890,57 @@ const saveCommissionGoals = async (req, res) => {
           GROUP BY cg.id
           ORDER BY cg.id
         `;
+
+        if (!isAdmin && !isChairman) {
+          const oldById = new Map(oldGoals.map((g) => [Number(g.id), g]));
+          const goalIds = goals.map((g) => Number(g?.id));
+          if (
+            !goalIds.length ||
+            goalIds.some((id) => !Number.isSafeInteger(id) || id <= 0) ||
+            new Set(goalIds).size !== goalIds.length
+          ) {
+            return {
+              error: {
+                status: 400,
+                message: "Assigned users must provide existing goal ids to edit goals",
+              },
+            };
+          }
+
+          const editableGoals = [];
+          for (let index = 0; index < goals.length; index++) {
+            const previous = oldById.get(goalIds[index]);
+            const assignees = normalizeCommissionGoalAssignees(previous?.assigned_to);
+            if (!previous || !assignees.includes(userId)) {
+              return {
+                error: {
+                  status: 403,
+                  message: "Only a goal assignee, commission chairman, or admin can edit that goal",
+                },
+              };
+            }
+            editableGoals.push({ incoming: goals[index], previous });
+          }
+
+          for (const { incoming, previous } of editableGoals) {
+            const title = typeof incoming.title === "string" ? incoming.title.trim() : "";
+            await trx`
+              UPDATE commission_goals
+              SET goals = ${title},
+                  steps = ${incoming.description || ""},
+                  estimated_cost = ${incoming.estimated_cost || 0},
+                  due_date = ${incoming.deadline || null}
+              WHERE id = ${previous.id}
+                AND commission_id = ${commissionId}
+                AND idea_id = ${ideaId}
+            `;
+          }
+
+          return {
+            commissionMembersAddedByGoals: [],
+            goalAssignmentsToNotify: [],
+          };
+        }
 
         const oldById = new Map(oldGoals.map((g) => [Number(g.id), g]));
         const oldByTitle = new Map();
@@ -1925,6 +2026,13 @@ const saveCommissionGoals = async (req, res) => {
           goalAssignmentsToNotify: assignmentsToNotify,
         };
       });
+
+    if (saveResult.error) {
+      return res.status(saveResult.error.status).json({
+        message: saveResult.error.message,
+      });
+    }
+    const { commissionMembersAddedByGoals, goalAssignmentsToNotify } = saveResult;
 
     // Nie wysyłamy żadnej poczty w trakcie transakcji.
     // Dotychczasowe powiadomienie o wejściu do komisji pozostaje bez zmian.
@@ -2072,10 +2180,18 @@ const updateCommissionGoalStatus = async (req, res) => {
   try {
     const ideaId = Number(req.params.id);
     const goalId = Number(req.body?.goalId);
+    const userId = Number(req.user?.id);
+    const roleId = Number(req.user?.role_id ?? req.user?.roleId);
+    const isAdmin =
+      roleId === 1 ||
+      norm(req.user?.role_name) === "admin";
     const isDone = req.body?.is_done;
 
     if (!Number.isSafeInteger(ideaId) || ideaId <= 0) {
       return res.status(400).json({ message: "Invalid idea id" });
+    }
+    if (!Number.isSafeInteger(userId) || userId <= 0) {
+      return res.status(401).json({ message: "Unauthorized" });
     }
     if (!Number.isSafeInteger(goalId) || goalId <= 0) {
       return res.status(400).json({ message: "Invalid goal id" });
@@ -2108,6 +2224,25 @@ const updateCommissionGoalStatus = async (req, res) => {
       `;
       if (!goal) {
         return { error: { status: 404, message: "Goal not found" } };
+      }
+
+      const isChairman = Number(commission.chairman_user_id) === userId;
+      if (!isAdmin && !isChairman) {
+        const [assignment] = await trx`
+          SELECT 1
+          FROM commission_goal_assignees
+          WHERE goal_id = ${goalId}
+            AND user_id = ${userId}
+          LIMIT 1
+        `;
+        if (!assignment) {
+          return {
+            error: {
+              status: 403,
+              message: "Only the goal assignee, commission chairman, or admin can change its status",
+            },
+          };
+        }
       }
 
       const wasDone = goal.is_done === true;

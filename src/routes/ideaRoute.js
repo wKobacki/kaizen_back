@@ -52,19 +52,19 @@ router.get(
 
 router.post(
   "/:id/commission/goals",
-  requireCommissionAccess({ mode: "write" }),
+  requireCommissionAccess({ mode: "goal-write" }),
   controller.saveCommissionGoals
 );
 
 router.patch(
   "/:id/commission/goals",
-  requireCommissionAccess({ mode: "write" }),
+  requireCommissionAccess({ mode: "goal-write" }),
   controller.updateCommissionGoalStatus
 );
 
 router.put(
   "/:id/commission",
-  requireCommissionAccess({ mode: "write" }),
+  requireCommissionAccess({ mode: "manage-members" }),
   controller.updateCommissionMembers
 );
 
@@ -88,7 +88,7 @@ router.get(
 
 router.put(
   "/:id/commission/chairman",
-  requireCommissionAccess({ mode: "write" }),
+  requireCommissionAccess({ mode: "manage-chairman" }),
   controller.setCommissionChairman
 );
 
